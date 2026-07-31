@@ -1,13 +1,13 @@
 import { AlertTriangle } from "lucide-react";
-import { DIAS } from "@/lib/escalas/config-visual";
+import { formatarDiaHeader } from "@/lib/dates";
 import type { Alerta } from "@/types/dominio";
 
 interface GapAlertaProps {
   alertas: Alerta[];
+  dias: Date[]; // os 7 dias da semana exibida, para rotular cada alerta
 }
 
-/** Banner de alerta para turnos que não atingiram a cobertura mínima da zona. */
-export function GapAlerta({ alertas }: GapAlertaProps) {
+export function GapAlerta({ alertas, dias }: GapAlertaProps) {
   if (alertas.length === 0) return null;
 
   return (
@@ -21,14 +21,17 @@ export function GapAlerta({ alertas }: GapAlertaProps) {
             {alertas.length} turno{alertas.length > 1 ? "s" : ""} sem cobertura mínima
           </p>
           <ul className="mt-1.5 space-y-1">
-            {alertas.map((a, i) => (
-              <li key={i} className="text-sm text-white/60">
-                <span className="mr-2 text-white/30">
-                  {DIAS[a.dia]} · {a.periodo}
-                </span>
-                Atenção: {a.descricao}
-              </li>
-            ))}
+            {alertas.map((a, i) => {
+              const { abrev, numero } = formatarDiaHeader(dias[a.dia]);
+              return (
+                <li key={i} className="text-sm text-white/60">
+                  <span className="mr-2 text-white/30">
+                    {abrev} {numero} · {a.periodo}
+                  </span>
+                  Atenção: {a.descricao}
+                </li>
+              );
+            })}
           </ul>
         </div>
       </div>

@@ -1,37 +1,34 @@
-import { SETOR_TOKENS } from "@/lib/escalas/config-visual";
-import type { Funcionario } from "@/types/dominio";
+import type { Funcionario, Zona } from "@/types/dominio";
 
 interface TurnoCardProps {
   funcionario: Funcionario;
+  zona: Zona | null;
+  onClick?: () => void;
 }
 
-/**
- * Card de um funcionário dentro de um slot da grade semanal.
- * Mostra avatar (iniciais), nome, cargo, tag de horas com alerta de
- * hora extra e o contador de folgas obrigatórias.
- */
-export function TurnoCard({ funcionario }: TurnoCardProps) {
-  const token = SETOR_TOKENS[funcionario.setor];
-
-  const excedente = funcionario.horasSemana - funcionario.cargaAlvo;
+export function TurnoCard({ funcionario, zona, onClick }: TurnoCardProps) {
+  const excedente = funcionario.horasSemana - funcionario.cargaHorariaSemanalMax;
   const status: "critico" | "atencao" | "ok" =
     excedente > 0
       ? "critico"
-      : funcionario.horasSemana >= funcionario.cargaAlvo - 4
+      : funcionario.horasSemana >= funcionario.cargaHorariaSemanalMax - 4
       ? "atencao"
       : "ok";
 
   const folgasFaltando = Math.max(0, funcionario.folgasObrigatorias - funcionario.folgasUsadas);
+  const cor = zona?.cor ?? "#8B92A0"; // cinza neutro quando não há zona (modo linear)
 
   return (
     <div
+      onClick={onClick}
       className={`group relative rounded-lg border border-white/[0.06] bg-white/[0.03] p-2 transition hover:border-white/15 hover:bg-white/[0.05] ${
         status === "critico" ? "ring-1 ring-[#E5484D]/40" : ""
-      }`}
+      } ${onClick ? "cursor-pointer" : ""}`}
     >
       <div className="flex items-center gap-2">
         <div
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${token.bg} ${token.text}`}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+          style={{ backgroundColor: `${cor}1A`, color: cor }}
         >
           {funcionario.iniciais}
         </div>
