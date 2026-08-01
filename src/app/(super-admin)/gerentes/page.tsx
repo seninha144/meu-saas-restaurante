@@ -1,6 +1,6 @@
 import { requireSuperAdmin } from "@/lib/auth/permissions";
 import { createClient } from "@/lib/supabase/server";
-import { NovoGerenteForm } from "./NovoGerenteForm";
+import { NovoGerenteForm } from "@/components/admin/NovoGerenteForm";
 
 export default async function GerentesPage() {
   await requireSuperAdmin();

@@ -8,6 +8,7 @@ import { GestaoZonasModal } from "@/components/zonas/GestaoZonasModal";
 import type { Alerta, Funcionario, Turno, Zona } from "@/types/dominio";
 
 interface PainelEscalasProps {
+  escalaId: string;
   zonas: Zona[];
   usaZonas: boolean;
   funcionarios: Funcionario[];
@@ -18,6 +19,7 @@ interface PainelEscalasProps {
 }
 
 export function PainelEscalas({
+  escalaId,
   zonas,
   usaZonas,
   funcionarios,
@@ -34,6 +36,7 @@ export function PainelEscalas({
       <SeletorSemana inicio={dias[0]} fim={dias[6]} offsetAtual={offsetAtual} />
 
       <GradeSemanal
+        escalaId={escalaId}
         zonas={zonas}
         usaZonas={usaZonas}
         funcionarios={funcionarios}

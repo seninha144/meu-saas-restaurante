@@ -3,7 +3,7 @@
 import { useActionState, useState, useTransition } from "react";
 import { X } from "lucide-react";
 import { salvarZona, removerZona, definirUsaZonas, type ZonaFormState } from "@/app/(dashboard)/zonas/actions";
-import { PALETA_ZONAS } from "@/lib/escalas/paleta";
+import { PALETA_ZONAS } from "@/lib/zonas/paleta";
 import type { Zona } from "@/types/dominio";
 
 interface GestaoZonasModalProps {
@@ -16,7 +16,7 @@ const estadoInicial: ZonaFormState = {};
 
 export function GestaoZonasModal({ zonas, usaZonas, onFechar }: GestaoZonasModalProps) {
   const [state, formAction, pending] = useActionState(salvarZona, estadoInicial);
-  const [corSelecionada, setCorSelecionada] = useState(PALETA_ZONAS[0].hex);
+  const [corSelecionada, setCorSelecionada] = useState<string>("#E8A33D");
   const [isPendingToggle, startTransition] = useTransition();
 
   return (

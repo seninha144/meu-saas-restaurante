@@ -1,15 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { FileDown, MessageCircle } from "lucide-react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { FileDown, MessageCircle, Sparkles, Loader2 } from "lucide-react";
 import { formatarDiaHeader } from "@/lib/dates";
 import type { Funcionario, Periodo, Turno, Zona } from "@/types/dominio";
 import { PERIODOS } from "@/types/dominio";
 import { TurnoCard } from "./TurnoCard";
 import { GapAlerta } from "./GapAlerta";
+import { gerarEscalaAutomatica } from "@/app/(dashboard)/escalas/actions";
 import type { Alerta } from "@/types/dominio";
 
 interface GradeSemanalProps {
+  escalaId: string;
   zonas: Zona[];
   usaZonas: boolean;
   funcionarios: Funcionario[];
@@ -22,6 +25,7 @@ interface GradeSemanalProps {
 }
 
 export function GradeSemanal({
+  escalaId,
   zonas,
   usaZonas,
   funcionarios,
@@ -33,6 +37,28 @@ export function GradeSemanal({
   onEditarFuncionario,
 }: GradeSemanalProps) {
   const [zonaFiltro, setZonaFiltro] = useState<string | "todas">("todas");
+  const router = useRouter();
+  const [gerando, startGerando] = useTransition();
+  const [resultadoGeracao, setResultadoGeracao] = useState<string | null>(null);
+
+  function handleGerarEscala() {
+    setResultadoGeracao(null);
+    startGerando(async () => {
+      const resultado = await gerarEscalaAutomatica(escalaId);
+      if (resultado.erro) {
+        setResultadoGeracao(resultado.erro);
+      } else if (resultado.turnosGerados === 0 && (resultado.vagasSemCandidato ?? 0) > 0) {
+        setResultadoGeracao(
+          `${resultado.vagasSemCandidato} vaga(s) em aberto, mas nenhum funcionário elegível — verifique se eles estão vinculados à zona certa, disponíveis no dia/período e dentro da carga horária.`
+        );
+      } else {
+        setResultadoGeracao(
+          resultado.turnosGerados === 0 ? "Nenhum turno vazio para preencher." : `${resultado.turnosGerados} turno(s) gerado(s).`
+        );
+        router.refresh();
+      }
+    });
+  }
 
   const zonasVisiveis = usaZonas ? (zonaFiltro === "todas" ? zonas : zonas.filter((z) => z.id === zonaFiltro)) : [];
 
@@ -93,8 +119,25 @@ export function GradeSemanal({
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            onClick={handleGerarEscala}
+            disabled={gerando}
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-[#E8A33D] to-[#d1902f] px-4 py-2 text-sm font-semibold text-[#1a1206] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {gerando ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Gerando…
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4" />
+                Gerar escala automaticamente
+              </>
+            )}
+          </button>
+          <button
             onClick={onAbrirNovoFuncionario}
-            className="rounded-xl bg-gradient-to-b from-[#E8A33D] to-[#d1902f] px-4 py-2 text-sm font-semibold text-[#1a1206] transition hover:brightness-105"
+            className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/[0.08]"
           >
             + Novo funcionário
           </button>
@@ -108,6 +151,8 @@ export function GradeSemanal({
           </button>
         </div>
       </div>
+
+      {resultadoGeracao && <p className="mt-2 text-xs text-white/40">{resultadoGeracao}</p>}
 
       {/* ============================ GRADE ============================ */}
       <div className="mt-6 overflow-x-auto rounded-2xl border border-white/[0.06]">

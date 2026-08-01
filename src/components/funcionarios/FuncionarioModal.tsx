@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { salvarFuncionario, desativarFuncionario, type FuncionarioFormState } from "@/app/(dashboard)/funcionarios/actions";
 import type { Funcionario, Periodo, Zona } from "@/types/dominio";
@@ -19,9 +19,17 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
   const [state, formAction, pending] = useActionState(salvarFuncionario, estadoInicial);
   const [removendo, setRemovendo] = useState(false);
 
-  if (state.sucesso) {
-    onFechar();
-  }
+  // Fechar o modal é uma mudança de estado do componente PAI
+  // (PainelEscalas). Chamar onFechar() direto no corpo do componente
+  // dispara isso durante o render do FuncionarioModal, o que o React
+  // proíbe ("Cannot update a component while rendering a different
+  // component"). useEffect roda depois do render, então é seguro.
+  useEffect(() => {
+    if (state.sucesso) {
+      onFechar();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.sucesso]);
 
   async function handleRemover() {
     if (!funcionario) return;
@@ -49,7 +57,9 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
             <Campo label="Nome" name="nome" defaultValue={funcionario?.nome} required className="col-span-2" />
             <Campo label="Cargo" name="cargo" defaultValue={funcionario?.cargo} required />
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-white/50">Zona</label>
+              <label className="mb-1.5 block text-xs font-medium text-white/50">
+                Zona {usaZonas && zonas.length > 0 && <span className="text-[#E8A33D]">*</span>}
+              </label>
               <select
                 name="zonaId"
                 defaultValue={funcionario?.zonaId ?? ""}
@@ -63,6 +73,12 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
                   </option>
                 ))}
               </select>
+              {usaZonas && zonas.length > 0 && (
+                <p className="mt-1 text-[10px] text-white/30">
+                  Sem escolher uma zona aqui, este colaborador nunca vai ser elegível pra "Gerar escala
+                  automaticamente" nas zonas cadastradas.
+                </p>
+              )}
             </div>
 
             <Campo label="Idade" name="idade" type="number" defaultValue={funcionario?.idade ?? undefined} />

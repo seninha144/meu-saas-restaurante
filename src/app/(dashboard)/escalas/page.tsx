@@ -3,13 +3,18 @@ import { getRestaurante, getZonas } from "@/lib/data/queries";
 import { getFuncionarios } from "@/lib/data/funcionarios";
 import { getOuCriarEscala, getTurnos, getAlertasCobertura } from "@/lib/data/escalas";
 import { getSemana } from "@/lib/escalas/datas";
+import { PainelEscalas } from "@/components/escalas/PainelEscalas";
 
 interface EscalasPageProps {
   searchParams: Promise<{ semana?: string }>;
 }
 
 export default async function EscalasPage({ searchParams }: EscalasPageProps) {
+  // requireGerente() já garante papel === 'gerente' E restauranteId presente
+  // (redireciona pro /login se não), então daqui pra baixo é seguro usar
+  // gerente.restauranteId direto — sem gambiarra de snake_case.
   const gerente = await requireGerente();
+
   const { semana } = await searchParams;
   const offsetAtual = Number.isFinite(Number(semana)) ? Number(semana ?? 0) : 0;
 
@@ -29,27 +34,21 @@ export default async function EscalasPage({ searchParams }: EscalasPageProps) {
   ]);
 
   return (
-    <div className="min-h-screen bg-[#0b0d10] text-[#f1f0ec] font-sans">
-      <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-10">
-        <header className="flex flex-col gap-4 border-b border-white/[0.06] pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-white/40">{restaurante.nome}</p>
-            <h1 className="mt-1 font-[Space_Grotesk,system-ui,sans-serif] text-2xl font-semibold tracking-tight sm:text-3xl">
-              Escala da semana
-            </h1>
-          </div>
-        </header>
+    <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-10">
+      <h1 className="font-[Space_Grotesk,system-ui,sans-serif] text-2xl font-semibold tracking-tight sm:text-3xl">
+        Escala da semana
+      </h1>
 
-        <PainelEscalas
-          zonas={zonas}
-          usaZonas={restaurante.usaZonas}
-          funcionarios={funcionarios}
-          turnos={turnos}
-          alertas={alertas}
-          dias={dias}
-          offsetAtual={offsetAtual}
-        />
-      </div>
+      <PainelEscalas
+        escalaId={escala.id}
+        zonas={zonas}
+        usaZonas={restaurante.usaZonas}
+        funcionarios={funcionarios}
+        turnos={turnos}
+        alertas={alertas}
+        dias={dias}
+        offsetAtual={offsetAtual}
+      />
     </div>
   );
 }
