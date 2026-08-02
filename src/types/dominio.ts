@@ -1,8 +1,5 @@
 /* =====================================================================
  * TIPOS DE DOMÍNIO
- * Zona não é mais um enum fixo — é uma entidade dinâmica, criada e
- * mantida pelo próprio gerente. `zonaId: null` representa "sem zona"
- * (restaurante em modo linear, ou colaborador ainda não alocado).
  * ===================================================================== */
 
 export type PapelUsuario = "super_admin" | "gerente" | "funcionario";
@@ -15,19 +12,32 @@ export interface Usuario {
   restauranteId: string | null; // null apenas para super_admin
 }
 
+export type Plano = "trial" | "basico" | "pro";
+export type StatusAssinatura = "trial" | "active" | "canceled";
+export type FrequenciaPagamento = "dia" | "semana" | "quinzena" | "mes";
+
 export interface Restaurante {
   id: string;
   nome: string;
   pais: "BR" | "PT";
   moeda: "BRL" | "EUR";
   usaZonas: boolean;
+  // --- plano / assinatura ---
+  plano: Plano;
+  maxFuncionarios: number;
+  permiteIA: boolean;
+  statusAssinatura: StatusAssinatura;
+  trialEndsAt: string; // ISO datetime
+  // --- perfil financeiro padrão (herdado pelos funcionários) ---
+  valorHoraPadrao: number;
+  frequenciaPagamentoPadrao: FrequenciaPagamento;
 }
 
 export interface Zona {
   id: string;
   restauranteId: string;
   nome: string;
-  cor: string; // hex, escolhido de PALETA_ZONAS
+  cor: string;
   ordem: number;
   capacidadeMinima: number;
 }
@@ -40,7 +50,7 @@ export type Genero = "masculino" | "feminino" | "outro" | "prefiro_nao_informar"
 export interface DisponibilidadeDia {
   diaSemana: number; // 0 = Segunda ... 6 = Domingo
   disponivel: boolean;
-  periodosPreferidos: Periodo[]; // vazio = sem preferência
+  periodosPreferidos: Periodo[];
 }
 
 export interface Funcionario {
@@ -52,12 +62,15 @@ export interface Funcionario {
   iniciais: string;
   idade: number | null;
   genero: Genero | null;
-  horasSemana: number; // calculado a partir dos turnos da semana exibida
-  cargaHorariaSemanalMax: number; // ex: 44, 30 — referência de hora extra
+  horasSemana: number;
+  cargaHorariaSemanalMax: number;
   folgasUsadas: number;
   folgasObrigatorias: number;
   disponibilidade: DisponibilidadeDia[];
   ativo: boolean;
+  // --- perfil financeiro — null = herda do restaurante ---
+  valorHora: number | null;
+  frequenciaPagamento: FrequenciaPagamento | null;
 }
 
 export interface Turno {
@@ -75,4 +88,25 @@ export interface Alerta {
   periodo: Periodo;
   descricao: string;
   nivel: NivelAlerta;
+}
+
+/** Resumo do ciclo financeiro corrente de um funcionário — calculado, não persistido. */
+export interface ResumoPagamento {
+  frequencia: FrequenciaPagamento;
+  cicloInicio: string; // ISO date
+  cicloFim: string; // ISO date
+  horasTrabalhadas: number;
+  valorHora: number;
+  valorTotal: number;
+  jaPago: boolean;
+}
+
+export interface PagamentoHistorico {
+  id: string;
+  funcionarioId: string;
+  cicloInicio: string;
+  cicloFim: string;
+  horasTrabalhadas: number;
+  valorPago: number;
+  pagoEm: string;
 }

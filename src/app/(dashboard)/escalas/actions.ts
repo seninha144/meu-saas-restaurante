@@ -11,8 +11,6 @@ const HORAS_POR_TURNO = 8;
 export interface GerarEscalaState {
   erro?: string;
   turnosGerados?: number;
-  /** Vagas que existiam mas nenhum funcionário elegível foi encontrado
-   *  (zona errada, indisponibilidade ou carga horária estourada). */
   vagasSemCandidato?: number;
 }
 
@@ -20,9 +18,18 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
   const gerente = await requireGerente();
   const supabase = await createClient();
 
-  const [{ data: restaurante }, { data: zonasRaw }, { data: funcionariosRaw }, { data: disponibilidadesRaw }, { data: turnosExistentes }] =
+  const { data: restauranteConfig } = await supabase
+    .from("restaurantes")
+    .select("usa_zonas, permite_ia")
+    .eq("id", gerente.restauranteId)
+    .single();
+
+  if (restauranteConfig && !restauranteConfig.permite_ia) {
+    return { erro: "Seu plano atual não inclui a geração automática de escala. Faça upgrade pra liberar." };
+  }
+
+  const [{ data: zonasRaw }, { data: funcionariosRaw }, { data: disponibilidadesRaw }, { data: turnosExistentes }] =
     await Promise.all([
-      supabase.from("restaurantes").select("usa_zonas").eq("id", gerente.restauranteId).single(),
       supabase.from("zonas").select("id, capacidade_minima").eq("restaurante_id", gerente.restauranteId).eq("ativo", true),
       supabase
         .from("funcionarios")
@@ -33,7 +40,7 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
       supabase.from("turnos").select("id, funcionario_id, zona_id, dia_semana, periodo").eq("escala_id", escalaId),
     ]);
 
-  const usaZonas = restaurante?.usa_zonas ?? true;
+  const usaZonas = restauranteConfig?.usa_zonas ?? true;
   const zonas = zonasRaw ?? [];
   const funcionarios = funcionariosRaw ?? [];
   const disponibilidades = disponibilidadesRaw ?? [];
