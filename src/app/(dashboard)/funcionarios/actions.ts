@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireGerente } from "@/lib/auth/permissions";
 import { createClient } from "@/lib/supabase/server";
-import { getResumoPagamento } from "@/lib/data/queries";
+import { getResumoPagamento } from "@/lib/data/pagamentos";
 import type { ResumoPagamento } from "@/types/dominio";
 
 export interface FuncionarioFormState {
