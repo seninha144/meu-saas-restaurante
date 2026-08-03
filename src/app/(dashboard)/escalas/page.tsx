@@ -2,24 +2,26 @@ import { requireGerente } from "@/lib/auth/permissions";
 import { getRestaurante, getZonas } from "@/lib/data/queries";
 import { getFuncionarios } from "@/lib/data/funcionarios";
 import { getOuCriarEscala, getTurnos, getAlertasCobertura } from "@/lib/data/escalas";
-import { getSemana } from "@/lib/escalas/datas";
+import { getSemana, toISODate } from "@/lib/dates";
 import { PainelEscalas } from "@/components/escalas/PainelEscalas";
+
+// Força essa página a nunca ser cacheada estaticamente — ela depende
+// da data atual do momento da requisição (semana corrente) e de
+// query params de navegação, então cache estático é incorreto aqui.
+export const dynamic = "force-dynamic";
 
 interface EscalasPageProps {
   searchParams: Promise<{ semana?: string }>;
 }
 
 export default async function EscalasPage({ searchParams }: EscalasPageProps) {
-  // requireGerente() já garante papel === 'gerente' E restauranteId presente
-  // (redireciona pro /login se não), então daqui pra baixo é seguro usar
-  // gerente.restauranteId direto — sem gambiarra de snake_case.
   const gerente = await requireGerente();
 
   const { semana } = await searchParams;
-  const offsetAtual = Number.isFinite(Number(semana)) ? Number(semana ?? 0) : 0;
+  const offsetAtual = semana !== undefined && Number.isFinite(Number(semana)) ? Number(semana) : 0;
 
   const { inicio, fim, dias } = getSemana(offsetAtual);
-  const semanaInicioISO = inicio.toISOString().slice(0, 10);
+  const semanaInicioISO = toISODate(inicio);
 
   const [restaurante, zonas, funcionarios] = await Promise.all([
     getRestaurante(gerente.restauranteId),
@@ -47,6 +49,7 @@ export default async function EscalasPage({ searchParams }: EscalasPageProps) {
         turnos={turnos}
         alertas={alertas}
         dias={dias}
+        diasFuncionamento={restaurante.diasFuncionamento}
         offsetAtual={offsetAtual}
       />
     </div>

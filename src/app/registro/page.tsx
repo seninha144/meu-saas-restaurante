@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import { registrarRestaurante, type RegistroState } from "./actions";
 
@@ -18,7 +19,7 @@ export default function RegistroPage() {
   }
 
   if (state.sucesso) {
-    if (typeof window !== "undefined") window.location.href = "/escalas";
+    if (typeof window !== "undefined") window.location.href = "/onboarding";
     return null;
   }
 
@@ -38,8 +39,6 @@ export default function RegistroPage() {
           ))}
         </div>
 
-        {/* Um único <form> — os passos escondidos continuam no DOM, então
-            os valores digitados neles vão junto no FormData do submit final. */}
         <form action={formAction} className="mt-6 space-y-4">
           <div className={passo === 1 ? "space-y-4" : "hidden"}>
             <Campo label="Seu nome" name="nomeGerente" required={passo === 1} />
@@ -82,9 +81,6 @@ export default function RegistroPage() {
                 <option value="quinzena">Quinzenal</option>
                 <option value="mes">Mensal</option>
               </select>
-              <p className="mt-1.5 text-xs text-white/30">
-                Você pode ajustar o dia/janela de fechamento depois, nas configurações do restaurante.
-              </p>
             </div>
           </div>
 
@@ -122,6 +118,13 @@ export default function RegistroPage() {
             )}
           </div>
         </form>
+
+        <p className="mt-6 text-center text-xs text-white/40">
+          Já tem uma conta?{" "}
+          <Link href="/login" className="font-medium text-[#E8A33D] hover:underline">
+            Faça login
+          </Link>
+        </p>
       </div>
     </div>
   );

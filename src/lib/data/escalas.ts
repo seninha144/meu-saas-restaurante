@@ -1,9 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
+import { toISODate } from "@/lib/dates";
 import type { Periodo, Turno } from "@/types/dominio";
-
-function toISODate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 /** Busca a escala da semana; cria uma em rascunho se ainda não existir. */
 export async function getOuCriarEscala(restauranteId: string, inicio: Date, fim: Date) {
@@ -52,7 +49,6 @@ export async function getTurnos(escalaId: string): Promise<Turno[]> {
   }));
 }
 
-/** Alertas de cobertura mínima: compara turnos alocados x capacidade_minima de cada zona, por dia/período. */
 export async function getAlertasCobertura(restauranteId: string, escalaId: string) {
   const supabase = await createClient();
 

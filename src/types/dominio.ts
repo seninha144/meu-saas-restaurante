@@ -9,7 +9,7 @@ export interface Usuario {
   nomeCompleto: string;
   email: string;
   papel: PapelUsuario;
-  restauranteId: string | null; // null apenas para super_admin
+  restauranteId: string | null;
 }
 
 export type Plano = "trial" | "basico" | "pro";
@@ -31,6 +31,17 @@ export interface Restaurante {
   // --- perfil financeiro padrão (herdado pelos funcionários) ---
   valorHoraPadrao: number;
   frequenciaPagamentoPadrao: FrequenciaPagamento;
+  // --- onboarding operacional ---
+  onboardingConcluido: boolean;
+  diasFuncionamento: number[]; // 0=Segunda ... 6=Domingo
+  coberturaFdsPrioritaria: boolean;
+}
+
+export interface HorarioFuncionamento {
+  diaSemana: number;
+  fechado: boolean;
+  horaAbertura: string | null; // "HH:MM"
+  horaFechamento: string | null;
 }
 
 export interface Zona {
@@ -48,7 +59,7 @@ export const PERIODOS: Periodo[] = ["Manhã", "Tarde", "Noite", "Fechamento"];
 export type Genero = "masculino" | "feminino" | "outro" | "prefiro_nao_informar";
 
 export interface DisponibilidadeDia {
-  diaSemana: number; // 0 = Segunda ... 6 = Domingo
+  diaSemana: number;
   disponivel: boolean;
   periodosPreferidos: Periodo[];
 }
@@ -68,7 +79,6 @@ export interface Funcionario {
   folgasObrigatorias: number;
   disponibilidade: DisponibilidadeDia[];
   ativo: boolean;
-  // --- perfil financeiro — null = herda do restaurante ---
   valorHora: number | null;
   frequenciaPagamento: FrequenciaPagamento | null;
 }
@@ -78,7 +88,7 @@ export interface Turno {
   funcionarioId: string;
   zonaId: string | null;
   periodo: Periodo;
-  dia: number; // 0-6, relativo à semana exibida
+  dia: number;
 }
 
 export type NivelAlerta = "critico" | "atencao";
@@ -90,11 +100,10 @@ export interface Alerta {
   nivel: NivelAlerta;
 }
 
-/** Resumo do ciclo financeiro corrente de um funcionário — calculado, não persistido. */
 export interface ResumoPagamento {
   frequencia: FrequenciaPagamento;
-  cicloInicio: string; // ISO date
-  cicloFim: string; // ISO date
+  cicloInicio: string;
+  cicloFim: string;
   horasTrabalhadas: number;
   valorHora: number;
   valorTotal: number;

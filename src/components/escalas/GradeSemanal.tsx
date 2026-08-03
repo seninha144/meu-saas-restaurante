@@ -4,12 +4,12 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FileDown, MessageCircle, Sparkles, Loader2 } from "lucide-react";
 import { formatarDiaHeader } from "@/lib/dates";
-import type { Funcionario, Periodo, Turno, Zona } from "@/types/dominio";
-import { PERIODOS } from "@/types/dominio";
-import { TurnoCard } from "./TurnoCard";
+import type { Funcionario, Turno, Zona } from "@/types/dominio";
 import { GapAlerta } from "./GapAlerta";
 import { gerarEscalaAutomatica } from "@/app/(dashboard)/escalas/actions";
 import type { Alerta } from "@/types/dominio";
+
+const HORAS_POR_TURNO = 8; // mesma estimativa usada no resto do projeto
 
 interface GradeSemanalProps {
   escalaId: string;
@@ -18,7 +18,8 @@ interface GradeSemanalProps {
   funcionarios: Funcionario[];
   turnos: Turno[];
   alertas: Alerta[];
-  dias: Date[]; // os 7 dias reais da semana exibida (Segunda a Domingo)
+  dias: Date[];
+  diasFuncionamento: number[]; // 0-6 — dias em que o restaurante abre
   onAbrirNovoFuncionario: () => void;
   onAbrirGestaoZonas: () => void;
   onEditarFuncionario: (funcionario: Funcionario) => void;
@@ -32,6 +33,7 @@ export function GradeSemanal({
   turnos,
   alertas,
   dias,
+  diasFuncionamento,
   onAbrirNovoFuncionario,
   onAbrirGestaoZonas,
   onEditarFuncionario,
@@ -49,7 +51,7 @@ export function GradeSemanal({
         setResultadoGeracao(resultado.erro);
       } else if (resultado.turnosGerados === 0 && (resultado.vagasSemCandidato ?? 0) > 0) {
         setResultadoGeracao(
-          `${resultado.vagasSemCandidato} vaga(s) em aberto, mas nenhum funcionário elegível — verifique se eles estão vinculados à zona certa, disponíveis no dia/período e dentro da carga horária.`
+          `${resultado.vagasSemCandidato} vaga(s) em aberto, mas nenhum funcionário elegível — verifique zona, disponibilidade e carga horária.`
         );
       } else {
         setResultadoGeracao(
@@ -60,25 +62,29 @@ export function GradeSemanal({
     });
   }
 
-  const zonasVisiveis = usaZonas ? (zonaFiltro === "todas" ? zonas : zonas.filter((z) => z.id === zonaFiltro)) : [];
-
-  const funcionarioPorId = useMemo(() => {
-    const map = new Map<string, Funcionario>();
-    funcionarios.forEach((f) => map.set(f.id, f));
+  const turnosPorFuncionarioDia = useMemo(() => {
+    const map = new Map<string, Turno>(); // chave: `${funcionarioId}:${dia}`
+    turnos.forEach((t) => map.set(`${t.funcionarioId}:${t.dia}`, t));
     return map;
-  }, [funcionarios]);
+  }, [turnos]);
 
-  const zonaPorId = useMemo(() => {
-    const map = new Map<string, Zona>();
-    zonas.forEach((z) => map.set(z.id, z));
+  const horasSemanaPorFuncionario = useMemo(() => {
+    const map = new Map<string, number>();
+    funcionarios.forEach((f) => map.set(f.id, 0));
+    turnos.forEach((t) => map.set(t.funcionarioId, (map.get(t.funcionarioId) ?? 0) + HORAS_POR_TURNO));
     return map;
-  }, [zonas]);
+  }, [funcionarios, turnos]);
 
-  function turnosDe(periodo: Periodo, dia: number, zonaId?: string | null) {
-    return turnos.filter(
-      (t) => t.periodo === periodo && t.dia === dia && (zonaId === undefined || t.zonaId === zonaId)
-    );
-  }
+  const grupos: { zona: Zona | null; funcionarios: Funcionario[] }[] = useMemo(() => {
+    if (!usaZonas) {
+      return [{ zona: null, funcionarios }];
+    }
+    const zonasFiltradas = zonaFiltro === "todas" ? zonas : zonas.filter((z) => z.id === zonaFiltro);
+    return zonasFiltradas.map((zona) => ({
+      zona,
+      funcionarios: funcionarios.filter((f) => f.zonaId === zona.id),
+    }));
+  }, [usaZonas, zonas, zonaFiltro, funcionarios]);
 
   return (
     <div>
@@ -157,117 +163,97 @@ export function GradeSemanal({
       {/* ============================ GRADE ============================ */}
       <div className="mt-6 overflow-x-auto rounded-2xl border border-white/[0.06]">
         <div className="min-w-[980px]">
-          <div className="grid grid-cols-[140px_repeat(7,1fr)] border-b border-white/[0.06] bg-white/[0.02]">
+          <div className="grid grid-cols-[200px_repeat(7,1fr)] border-b border-white/[0.06] bg-white/[0.02]">
             <div className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-white/30">
-              {usaZonas ? "Zona / turno" : "Turno"}
+              Colaborador · horas/semana
             </div>
             {dias.map((dia, i) => {
               const { abrev, numero } = formatarDiaHeader(dia);
+              const aberto = diasFuncionamento.includes(i);
               return (
                 <div
                   key={i}
                   className={`px-3 py-3 text-center text-xs font-medium uppercase tracking-wider ${
-                    i >= 5 ? "text-white/60" : "text-white/30"
+                    !aberto ? "text-white/15" : i >= 5 ? "text-white/60" : "text-white/30"
                   }`}
                 >
-                  {abrev} <span className="text-white/25">{numero}</span>
+                  {abrev} <span className={aberto ? "text-white/25" : "text-white/15"}>{numero}</span>
                 </div>
               );
             })}
           </div>
 
-          {usaZonas
-            ? zonasVisiveis.map((zona) => (
-                <BlocoDeLinhas
-                  key={zona.id}
-                  titulo={zona.nome}
-                  cor={zona.cor}
-                  dias={dias}
-                  renderCelula={(periodo, diaIdx) =>
-                    turnosDe(periodo, diaIdx, zona.id).map((slot) => {
-                      const f = funcionarioPorId.get(slot.funcionarioId);
-                      if (!f) return null;
-                      return (
-                        <TurnoCard
-                          key={slot.id}
-                          funcionario={f}
-                          zona={zonaPorId.get(slot.zonaId ?? "") ?? null}
-                          onClick={() => onEditarFuncionario(f)}
-                        />
-                      );
-                    })
-                  }
-                />
-              ))
-            : (
-                <BlocoDeLinhas
-                  titulo={null}
-                  cor="#8B92A0"
-                  dias={dias}
-                  renderCelula={(periodo, diaIdx) =>
-                    turnosDe(periodo, diaIdx).map((slot) => {
-                      const f = funcionarioPorId.get(slot.funcionarioId);
-                      if (!f) return null;
-                      return (
-                        <TurnoCard key={slot.id} funcionario={f} zona={null} onClick={() => onEditarFuncionario(f)} />
-                      );
-                    })
-                  }
-                />
+          {grupos.map(({ zona, funcionarios: funcionariosDoGrupo }, idx) => (
+            <div key={zona?.id ?? "sem-zona"} className={idx !== grupos.length - 1 ? "border-b border-white/[0.06]" : ""}>
+              {zona && (
+                <div className="flex items-center gap-2 border-b border-white/[0.03] bg-white/[0.015] px-4 py-2">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: zona.cor }} />
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white/60">{zona.nome}</span>
+                </div>
               )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function BlocoDeLinhas({
-  titulo,
-  cor,
-  dias,
-  renderCelula,
-}: {
-  titulo: string | null;
-  cor: string;
-  dias: Date[];
-  renderCelula: (periodo: Periodo, diaIdx: number) => React.ReactNode;
-}) {
-  return (
-    <div className="border-b border-white/[0.06] last:border-b-0">
-      {PERIODOS.map((periodo, pIdx) => (
-        <div
-          key={periodo}
-          className={`grid grid-cols-[140px_repeat(7,1fr)] ${
-            pIdx !== PERIODOS.length - 1 ? "border-b border-white/[0.03]" : ""
-          }`}
-        >
-          <div className="relative flex items-center gap-2 px-4 py-3">
-            <span className="absolute left-0 top-0 h-full w-[3px]" style={{ backgroundColor: cor }} />
-            {pIdx === 0 && titulo ? (
-              <span className="text-sm font-semibold text-white/85">{titulo}</span>
-            ) : (
-              <span className={titulo ? "pl-5 text-xs text-white/35" : "text-xs text-white/35"}>{periodo}</span>
-            )}
-          </div>
+              {funcionariosDoGrupo.length === 0 && (
+                <div className="px-4 py-3 text-xs text-white/20">Nenhum funcionário vinculado a esta zona.</div>
+              )}
 
-          {dias.map((_, diaIdx) => (
-            <div key={diaIdx} className="flex min-h-[64px] flex-col gap-1.5 border-l border-white/[0.03] p-1.5">
-              {(() => {
-                const conteudo = renderCelula(periodo, diaIdx);
-                const vazio = Array.isArray(conteudo) ? conteudo.every((c) => c === null) : !conteudo;
-                if (vazio) {
-                  return (
-                    <div className="flex h-full min-h-[48px] items-center justify-center rounded-lg border border-dashed border-white/[0.06] text-[10px] text-white/15">
-                      —
-                    </div>
-                  );
-                }
-                return conteudo;
-              })()}
+              {funcionariosDoGrupo.map((f) => {
+                const horas = horasSemanaPorFuncionario.get(f.id) ?? 0;
+                const sobrecarregado = horas > f.cargaHorariaSemanalMax;
+
+                return (
+                  <div
+                    key={f.id}
+                    className="grid grid-cols-[200px_repeat(7,1fr)] border-b border-white/[0.03] last:border-b-0"
+                  >
+                    <button
+                      onClick={() => onEditarFuncionario(f)}
+                      className="flex flex-col items-start gap-1 px-4 py-3 text-left transition hover:bg-white/[0.03]"
+                    >
+                      <span className="truncate text-sm font-medium text-white/90">{f.nome}</span>
+                      <span className="truncate text-[10px] text-white/35">{f.cargo}</span>
+                      <span
+                        className={`mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          sobrecarregado ? "bg-[#E5484D]/15 text-[#E5484D]" : "bg-white/[0.06] text-white/50"
+                        }`}
+                      >
+                        {horas}h / {f.cargaHorariaSemanalMax}h
+                      </span>
+                    </button>
+
+                    {dias.map((_, diaIdx) => {
+                      const turno = turnosPorFuncionarioDia.get(`${f.id}:${diaIdx}`);
+                      const aberto = diasFuncionamento.includes(diaIdx);
+
+                      return (
+                        <div
+                          key={diaIdx}
+                          className={`flex min-h-[56px] items-center justify-center border-l border-white/[0.03] p-1.5 ${
+                            !aberto ? "bg-white/[0.008]" : ""
+                          }`}
+                        >
+                          {!aberto ? (
+                            <span className="text-[10px] text-white/10">Fechado</span>
+                          ) : turno ? (
+                            <button
+                              onClick={() => onEditarFuncionario(f)}
+                              className="flex flex-col items-center rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1.5 transition hover:border-white/15 hover:bg-white/[0.05]"
+                            >
+                              <span className="text-sm font-semibold text-white/85">{HORAS_POR_TURNO}h</span>
+                              <span className="text-[9px] text-white/35">{turno.periodo}</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-white/15">—</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }

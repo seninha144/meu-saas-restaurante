@@ -15,6 +15,7 @@ interface PainelEscalasProps {
   turnos: Turno[];
   alertas: Alerta[];
   dias: Date[];
+  diasFuncionamento: number[];
   offsetAtual: number;
 }
 
@@ -26,6 +27,7 @@ export function PainelEscalas({
   turnos,
   alertas,
   dias,
+  diasFuncionamento,
   offsetAtual,
 }: PainelEscalasProps) {
   const [modalFuncionario, setModalFuncionario] = useState<Funcionario | "novo" | null>(null);
@@ -43,6 +45,7 @@ export function PainelEscalas({
         turnos={turnos}
         alertas={alertas}
         dias={dias}
+        diasFuncionamento={diasFuncionamento}
         onAbrirNovoFuncionario={() => setModalFuncionario("novo")}
         onAbrirGestaoZonas={() => setModalZonas(true)}
         onEditarFuncionario={(f) => setModalFuncionario(f)}

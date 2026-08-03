@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import { entrar, type LoginState } from "./actions";
 
@@ -49,8 +50,11 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 text-xs text-white/30">
-          Contas de Gerente são criadas apenas pelo administrador da plataforma.
+        <p className="mt-6 text-center text-xs text-white/40">
+          Não tem uma conta?{" "}
+          <Link href="/registro" className="font-medium text-[#E8A33D] hover:underline">
+            Crie uma conta grátis
+          </Link>
         </p>
       </div>
     </div>

@@ -7,6 +7,8 @@ import type { Periodo } from "@/types/dominio";
 
 const PERIODOS: Periodo[] = ["Manhã", "Tarde", "Noite", "Fechamento"];
 const HORAS_POR_TURNO = 8;
+const SABADO = 5;
+const DOMINGO = 6;
 
 export interface GerarEscalaState {
   erro?: string;
@@ -20,7 +22,7 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
 
   const { data: restauranteConfig } = await supabase
     .from("restaurantes")
-    .select("usa_zonas, permite_ia")
+    .select("usa_zonas, permite_ia, dias_funcionamento, cobertura_fds_prioritaria")
     .eq("id", gerente.restauranteId)
     .single();
 
@@ -41,12 +43,28 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
     ]);
 
   const usaZonas = restauranteConfig?.usa_zonas ?? true;
+  const diasFuncionamento: number[] = restauranteConfig?.dias_funcionamento ?? [0, 1, 2, 3, 4, 5, 6];
+  const coberturaFdsPrioritaria = restauranteConfig?.cobertura_fds_prioritaria ?? true;
+
   const zonas = zonasRaw ?? [];
   const funcionarios = funcionariosRaw ?? [];
   const disponibilidades = disponibilidadesRaw ?? [];
   const turnos = turnosExistentes ?? [];
 
   const combinacoesZona: (string | null)[] = usaZonas ? zonas.map((z) => z.id) : [null];
+
+  // Sábado/domingo primeiro (quando priorizado) — como o algoritmo é
+  // guloso e os candidatos elegíveis vão ficando mais escassos à
+  // medida que preenche vagas, processar o fim de semana ANTES dos
+  // dias úteis garante que ele não fique com "as sobras".
+  const diasParaProcessar = diasFuncionamento
+    .slice()
+    .sort((a, b) => {
+      if (!coberturaFdsPrioritaria) return a - b;
+      const aFds = a === SABADO || a === DOMINGO ? 0 : 1;
+      const bFds = b === SABADO || b === DOMINGO ? 0 : 1;
+      return aFds - bFds || a - b;
+    });
 
   const horasAlocadas = new Map<string, number>();
   const diasOcupados = new Map<string, Set<number>>();
@@ -86,8 +104,8 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
 
   let vagasSemCandidato = 0;
 
-  for (const zonaId of combinacoesZona) {
-    for (let dia = 0; dia < 7; dia++) {
+  for (const dia of diasParaProcessar) {
+    for (const zonaId of combinacoesZona) {
       for (const periodo of PERIODOS) {
         const jaAlocado = turnos.some((t) => t.zona_id === zonaId && t.dia_semana === dia && t.periodo === periodo);
         if (jaAlocado) continue;

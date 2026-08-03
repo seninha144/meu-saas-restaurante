@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { requireGerente } from "@/lib/auth/permissions";
 import { getRestaurante } from "@/lib/data/queries";
 import { UserMenu } from "@/components/layout/UserMenu";
@@ -5,6 +6,13 @@ import { UserMenu } from "@/components/layout/UserMenu";
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const gerente = await requireGerente();
   const restaurante = await getRestaurante(gerente.restauranteId);
+
+  // Portão do onboarding: fica aqui (não em requireGerente) porque só
+  // deve barrar a VISUALIZAÇÃO do painel, não toda Server Action —
+  // e porque /onboarding em si não passa por este layout, evitando loop.
+  if (!restaurante.onboardingConcluido) {
+    redirect("/onboarding");
+  }
 
   return (
     <div className="min-h-screen bg-[#0b0d10] font-sans text-[#f1f0ec]">

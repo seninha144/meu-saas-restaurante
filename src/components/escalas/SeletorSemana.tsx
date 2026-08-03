@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { formatarIntervalo } from "@/lib/dates";
 
@@ -10,14 +10,9 @@ interface SeletorSemanaProps {
   offsetAtual: number;
 }
 
-/**
- * A navegação entre semanas muda a URL (?semana=N) em vez de manter
- * estado só no client — assim o Server Component da página (page.tsx)
- * refaz o fetch dos turnos/funcionários daquela semana real no banco,
- * em vez de só trocar um rótulo na tela.
- */
 export function SeletorSemana({ inicio, fim, offsetAtual }: SeletorSemanaProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   function irPara(offset: number) {
@@ -27,7 +22,8 @@ export function SeletorSemana({ inicio, fim, offsetAtual }: SeletorSemanaProps) 
     } else {
       params.set("semana", String(offset));
     }
-    router.push(`?${params.toString()}`);
+    const query = params.toString();
+    router.push(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   return (
