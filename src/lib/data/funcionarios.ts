@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import type { DisponibilidadeDia, Funcionario, Periodo } from "@/types/dominio";
+import type { DisponibilidadeDia, Funcionario, FrequenciaPagamento, Periodo } from "@/types/dominio";
 
 const DURACAO_PADRAO_HORAS = 8; // usado no cálculo de horasSemana quando não há hora_inicio/fim
 
@@ -9,7 +9,7 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
   const { data: funcionariosRaw, error } = await supabase
     .from("funcionarios")
     .select(
-      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo"
+      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento"
     )
     .eq("restaurante_id", restauranteId)
     .eq("ativo", true);
@@ -21,7 +21,6 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
     .select("funcionario_id, dia_semana, disponivel, periodo")
     .eq("restaurante_id", restauranteId);
 
-  // turnos da semana exibida, para calcular horas e folgas usadas de fato
   const { data: escala } = await supabase
     .from("escalas")
     .select("id")
@@ -61,6 +60,8 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
       folgasObrigatorias: f.folgas_obrigatorias_semana,
       disponibilidade,
       ativo: f.ativo,
+      valorHora: f.valor_hora === null ? null : Number(f.valor_hora),
+      frequenciaPagamento: f.frequencia_pagamento as FrequenciaPagamento | null,
     };
   });
 }
