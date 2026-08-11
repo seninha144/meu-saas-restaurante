@@ -16,6 +16,33 @@ export interface GerarEscalaState {
   vagasSemCandidato?: number;
 }
 
+function paraMinutos(hora: string): number {
+  const [h, m] = hora.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function paraHora(minutos: number): string {
+  const h = Math.floor(minutos / 60) % 24;
+  const m = Math.round(minutos % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Divide a janela de funcionamento do dia em 4 blocos contíguos, um por período. */
+function calcularJanelasPeriodo(abertura: string, fechamento: string): Record<Periodo, { inicio: string; fim: string }> {
+  const inicioMin = paraMinutos(abertura);
+  const fimMin = paraMinutos(fechamento);
+  const duracaoTotal = Math.max(fimMin - inicioMin, PERIODOS.length * 30); // nunca deixa blocos com menos de 30min
+  const duracaoBloco = duracaoTotal / PERIODOS.length;
+
+  const janelas = {} as Record<Periodo, { inicio: string; fim: string }>;
+  PERIODOS.forEach((periodo, i) => {
+    const inicio = inicioMin + i * duracaoBloco;
+    const fim = i === PERIODOS.length - 1 ? fimMin : inicioMin + (i + 1) * duracaoBloco;
+    janelas[periodo] = { inicio: paraHora(inicio), fim: paraHora(fim) };
+  });
+  return janelas;
+}
+
 export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEscalaState> {
   const gerente = await requireGerente();
   const supabase = await createClient();
@@ -30,7 +57,7 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
     return { erro: "Seu plano atual não inclui a geração automática de escala. Faça upgrade pra liberar." };
   }
 
-  const [{ data: zonasRaw }, { data: funcionariosRaw }, { data: disponibilidadesRaw }, { data: turnosExistentes }] =
+  const [{ data: zonasRaw }, { data: funcionariosRaw }, { data: disponibilidadesRaw }, { data: turnosExistentes }, { data: horariosRaw }] =
     await Promise.all([
       supabase.from("zonas").select("id, capacidade_minima").eq("restaurante_id", gerente.restauranteId).eq("ativo", true),
       supabase
@@ -40,6 +67,7 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
         .eq("ativo", true),
       supabase.from("disponibilidades").select("funcionario_id, dia_semana, disponivel, periodo").eq("restaurante_id", gerente.restauranteId),
       supabase.from("turnos").select("id, funcionario_id, zona_id, dia_semana, periodo").eq("escala_id", escalaId),
+      supabase.from("horarios_funcionamento").select("dia_semana, fechado, hora_abertura, hora_fechamento").eq("restaurante_id", gerente.restauranteId),
     ]);
 
   const usaZonas = restauranteConfig?.usa_zonas ?? true;
@@ -50,21 +78,16 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
   const funcionarios = funcionariosRaw ?? [];
   const disponibilidades = disponibilidadesRaw ?? [];
   const turnos = turnosExistentes ?? [];
+  const horariosPorDia = new Map((horariosRaw ?? []).map((h) => [h.dia_semana, h]));
 
   const combinacoesZona: (string | null)[] = usaZonas ? zonas.map((z) => z.id) : [null];
 
-  // Sábado/domingo primeiro (quando priorizado) — como o algoritmo é
-  // guloso e os candidatos elegíveis vão ficando mais escassos à
-  // medida que preenche vagas, processar o fim de semana ANTES dos
-  // dias úteis garante que ele não fique com "as sobras".
-  const diasParaProcessar = diasFuncionamento
-    .slice()
-    .sort((a, b) => {
-      if (!coberturaFdsPrioritaria) return a - b;
-      const aFds = a === SABADO || a === DOMINGO ? 0 : 1;
-      const bFds = b === SABADO || b === DOMINGO ? 0 : 1;
-      return aFds - bFds || a - b;
-    });
+  const diasParaProcessar = diasFuncionamento.slice().sort((a, b) => {
+    if (!coberturaFdsPrioritaria) return a - b;
+    const aFds = a === SABADO || a === DOMINGO ? 0 : 1;
+    const bFds = b === SABADO || b === DOMINGO ? 0 : 1;
+    return aFds - bFds || a - b;
+  });
 
   const horasAlocadas = new Map<string, number>();
   const diasOcupados = new Map<string, Set<number>>();
@@ -79,7 +102,6 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
 
   function elegivel(funcionarioId: string, zonaId: string | null, dia: number, periodo: Periodo): boolean {
     const f = funcionarios.find((x) => x.id === funcionarioId)!;
-
     if (usaZonas && f.zona_id !== zonaId) return false;
     if (diasOcupados.get(funcionarioId)?.has(dia)) return false;
     if ((horasAlocadas.get(funcionarioId) ?? 0) + HORAS_POR_TURNO > Number(f.carga_horaria_semanal_max)) return false;
@@ -99,12 +121,21 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
     zona_id: string | null;
     dia_semana: number;
     periodo: Periodo;
+    hora_inicio: string;
+    hora_fim: string;
     status: "agendado";
   }[] = [];
 
   let vagasSemCandidato = 0;
 
   for (const dia of diasParaProcessar) {
+    const horarioDia = horariosPorDia.get(dia);
+    if (horarioDia?.fechado) continue;
+
+    const abertura = horarioDia?.hora_abertura?.slice(0, 5) ?? "09:00";
+    const fechamento = horarioDia?.hora_fechamento?.slice(0, 5) ?? "23:00";
+    const janelas = calcularJanelasPeriodo(abertura, fechamento);
+
     for (const zonaId of combinacoesZona) {
       for (const periodo of PERIODOS) {
         const jaAlocado = turnos.some((t) => t.zona_id === zonaId && t.dia_semana === dia && t.periodo === periodo);
@@ -126,6 +157,8 @@ export async function gerarEscalaAutomatica(escalaId: string): Promise<GerarEsca
           zona_id: zonaId,
           dia_semana: dia,
           periodo,
+          hora_inicio: janelas[periodo].inicio,
+          hora_fim: janelas[periodo].fim,
           status: "agendado",
         });
 

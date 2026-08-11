@@ -1,19 +1,20 @@
 "use client";
 
 import { useActionState, useEffect, useState, useTransition } from "react";
-import { X, Wallet, Check } from "lucide-react";
+import { X, Wallet, Check, Clock, Play, Square } from "lucide-react";
 import {
   salvarFuncionario,
   desativarFuncionario,
   getResumoPagamentoAction,
   marcarComoPago,
+  baterPonto,
   type FuncionarioFormState,
 } from "@/app/(dashboard)/funcionarios/actions";
 import type { Funcionario, Periodo, ResumoPagamento, Zona } from "@/types/dominio";
 import { PERIODOS } from "@/types/dominio";
 
 interface FuncionarioModalProps {
-  funcionario: Funcionario | null; // null = criando um novo
+  funcionario: Funcionario | null;
   zonas: Zona[];
   usaZonas: boolean;
   onFechar: () => void;
@@ -21,12 +22,12 @@ interface FuncionarioModalProps {
 
 const estadoInicial: FuncionarioFormState = {};
 
-const LABEL_FREQUENCIA: Record<string, string> = {
-  dia: "diária",
-  semana: "semanal",
-  quinzena: "quinzenal",
-  mes: "mensal",
-};
+// Dá pra digitar um <select> nativo com o dropdown aberto ficando
+// branco/ilegível no dark mode porque o navegador usa a paleta clara
+// por padrão pro popup de opções, independente das classes Tailwind
+// aplicadas ao elemento. `colorScheme: "dark"` avisa o navegador pra
+// usar os controles nativos (inclusive o popup) na variante escura.
+const selectDarkStyle = { colorScheme: "dark" as const };
 
 export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: FuncionarioModalProps) {
   const [state, formAction, pending] = useActionState(salvarFuncionario, estadoInicial);
@@ -74,6 +75,7 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
                 name="zonaId"
                 defaultValue={funcionario?.zonaId ?? ""}
                 disabled={!usaZonas}
+                style={selectDarkStyle}
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50 disabled:opacity-40"
               >
                 <option value="">Sem zona fixa</option>
@@ -83,20 +85,15 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
                   </option>
                 ))}
               </select>
-              {usaZonas && zonas.length > 0 && (
-                <p className="mt-1 text-[10px] text-white/30">
-                  Sem escolher uma zona aqui, este colaborador nunca vai ser elegível pra "Gerar escala
-                  automaticamente" nas zonas cadastradas.
-                </p>
-              )}
             </div>
 
-            <Campo label="Idade" name="idade" type="number" defaultValue={funcionario?.idade ?? undefined} />
+            <Campo label="Idade" name="idade" type="number" min="14" defaultValue={funcionario?.idade ?? undefined} />
             <div>
               <label className="mb-1.5 block text-xs font-medium text-white/50">Gênero</label>
               <select
                 name="genero"
                 defaultValue={funcionario?.genero ?? ""}
+                style={selectDarkStyle}
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50"
               >
                 <option value="">Prefiro não informar</option>
@@ -110,12 +107,14 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
               label="Carga horária semanal (h)"
               name="cargaHorariaSemanalMax"
               type="number"
+              min="0"
               defaultValue={funcionario?.cargaHorariaSemanalMax ?? 44}
             />
             <Campo
               label="Folgas obrigatórias/semana"
               name="folgasObrigatorias"
               type="number"
+              min="0"
               defaultValue={funcionario?.folgasObrigatorias ?? 2}
             />
 
@@ -124,6 +123,7 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
               name="valorHora"
               type="number"
               step="0.01"
+              min="0"
               defaultValue={funcionario?.valorHora ?? undefined}
               placeholder="Herda do restaurante"
             />
@@ -132,6 +132,7 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
               <select
                 name="frequenciaPagamento"
                 defaultValue={funcionario?.frequenciaPagamento ?? ""}
+                style={selectDarkStyle}
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50"
               >
                 <option value="">Herdar do restaurante</option>
@@ -140,6 +141,24 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, onFechar }: Fun
                 <option value="quinzena">Quinzenal</option>
                 <option value="mes">Mensal</option>
               </select>
+            </div>
+
+            <div className="col-span-2">
+              <label className="mb-1.5 block text-xs font-medium text-white/50">Pausa de almoço</label>
+              <select
+                name="pausaAlmocoMinutos"
+                defaultValue={funcionario?.pausaAlmocoMinutos ?? 30}
+                style={selectDarkStyle}
+                className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50"
+              >
+                <option value={0}>Sem pausa</option>
+                <option value={30}>30 minutos</option>
+                <option value={45}>45 minutos</option>
+                <option value={60}>1 hora</option>
+              </select>
+              <p className="mt-1 text-[10px] text-white/30">
+                Descontada automaticamente das horas de cada turno com entrada e saída registradas.
+              </p>
             </div>
           </div>
 
@@ -182,41 +201,78 @@ function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, startCarregando] = useTransition();
   const [marcando, startMarcando] = useTransition();
+  const [batendo, startBatendo] = useTransition();
 
-  useEffect(() => {
+  function recarregar() {
     startCarregando(async () => {
       const resultado = await getResumoPagamentoAction(funcionarioId);
       if ("erro" in resultado) setErro(resultado.erro);
-      else setResumo(resultado);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [funcionarioId]);
-
-  function handleMarcarPago() {
-    startMarcando(async () => {
-      const resultado = await marcarComoPago(funcionarioId);
-      if (resultado.erro) {
-        setErro(resultado.erro);
-      } else {
-        setResumo((r) => (r ? { ...r, jaPago: true } : r));
+      else {
+        setErro(null);
+        setResumo(resultado);
       }
     });
   }
 
-  if (carregando && !resumo) {
-    return <div className="mt-4 h-20 animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.02]" />;
+  useEffect(() => {
+    recarregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [funcionarioId]);
+
+  // Enquanto o ponto está em aberto, o valor precisa "andar" sozinho —
+  // recarrega a cada minuto pra refletir a hora que passou, sem
+  // precisar a pessoa clicar em nada.
+  useEffect(() => {
+    if (!resumo?.pontoEmAberto) return;
+    const intervalo = setInterval(recarregar, 60_000);
+    return () => clearInterval(intervalo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumo?.pontoEmAberto]);
+
+  function handleMarcarPago() {
+    startMarcando(async () => {
+      const resultado = await marcarComoPago(funcionarioId);
+      if (resultado.erro) setErro(resultado.erro);
+      else recarregar();
+    });
   }
 
-  if (erro || !resumo) {
+  function handleBaterPonto() {
+    startBatendo(async () => {
+      const resultado = await baterPonto(funcionarioId);
+      if (resultado.erro) setErro(resultado.erro);
+      else recarregar();
+    });
+  }
+
+  if (carregando && !resumo) {
+    return <div className="mt-4 h-24 animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.02]" />;
+  }
+
+  if (!resumo) {
     return <p className="mt-4 text-xs text-white/30">Não foi possível calcular o resumo de pagamento.</p>;
   }
 
   return (
     <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-white/40">
-        <Wallet className="h-3.5 w-3.5" />
-        Ciclo {LABEL_FREQUENCIA[resumo.frequencia]} · {formatarData(resumo.cicloInicio)} –{" "}
-        {formatarData(resumo.cicloFim)}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-white/40">
+          <Wallet className="h-3.5 w-3.5" />
+          Saldo desde {formatarDataHora(resumo.desde)}
+        </div>
+        <button
+          type="button"
+          onClick={handleBaterPonto}
+          disabled={batendo}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${
+            resumo.pontoEmAberto
+              ? "bg-[#E5484D]/15 text-[#E5484D] hover:bg-[#E5484D]/25"
+              : "bg-[#3EC6B9]/15 text-[#3EC6B9] hover:bg-[#3EC6B9]/25"
+          }`}
+        >
+          {resumo.pontoEmAberto ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+          {resumo.pontoEmAberto ? "Bater saída" : "Bater entrada"}
+        </button>
       </div>
 
       <div className="mt-2 flex items-end justify-between">
@@ -224,33 +280,34 @@ function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
           <p className="text-2xl font-semibold">
             {resumo.valorTotal.toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
           </p>
-          <p className="text-xs text-white/40">
+          <p className="flex items-center gap-1 text-xs text-white/40">
+            {resumo.pontoEmAberto && <Clock className="h-3 w-3 animate-pulse text-[#3EC6B9]" />}
             {resumo.horasTrabalhadas}h × {resumo.valorHora.toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}/h
+            {resumo.pontoEmAberto && " · em andamento"}
           </p>
         </div>
 
-        {resumo.jaPago ? (
-          <span className="flex items-center gap-1.5 rounded-lg bg-[#3EC6B9]/15 px-3 py-2 text-xs font-semibold text-[#3EC6B9]">
-            <Check className="h-3.5 w-3.5" />
-            Pago
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={handleMarcarPago}
-            disabled={marcando || resumo.valorTotal === 0}
-            className="rounded-lg bg-gradient-to-b from-[#3EC6B9] to-[#2ea89c] px-3 py-2 text-xs font-semibold text-[#04201d] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {marcando ? "Registrando…" : "Marcar como pago"}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleMarcarPago}
+          disabled={marcando || resumo.horasTrabalhadas === 0 || resumo.pontoEmAberto}
+          className="flex items-center gap-1.5 rounded-lg bg-gradient-to-b from-[#3EC6B9] to-[#2ea89c] px-3 py-2 text-xs font-semibold text-[#04201d] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
+          title={resumo.pontoEmAberto ? "Feche o ponto em aberto antes de pagar" : undefined}
+        >
+          <Check className="h-3.5 w-3.5" />
+          {marcando ? "Registrando…" : "Marcar como pago"}
+        </button>
       </div>
+
+      {erro && <p className="mt-2 text-xs text-[#E5484D]">{erro}</p>}
     </div>
   );
 }
 
-function formatarData(iso: string): string {
-  return new Intl.DateTimeFormat("pt-PT", { day: "numeric", month: "short" }).format(new Date(iso));
+function formatarDataHora(iso: string): string {
+  return new Intl.DateTimeFormat("pt-PT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(
+    new Date(iso)
+  );
 }
 
 const DIAS_LABEL = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
@@ -306,6 +363,7 @@ function Campo({
   defaultValue,
   placeholder,
   step,
+  min,
   required,
   className,
 }: {
@@ -315,6 +373,7 @@ function Campo({
   defaultValue?: string | number;
   placeholder?: string;
   step?: string;
+  min?: string;
   required?: boolean;
   className?: string;
 }) {
@@ -325,9 +384,14 @@ function Campo({
         name={name}
         type={type}
         step={step}
+        min={min}
         defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}
+        onKeyDown={(e) => {
+          // bloqueia o "-" na digitação em campos numéricos não-negativos
+          if (min === "0" && e.key === "-") e.preventDefault();
+        }}
         className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50"
       />
     </div>

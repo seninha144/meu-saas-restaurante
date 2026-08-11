@@ -5,7 +5,7 @@ import { GradeSemanal } from "./GradeSemanal";
 import { SeletorSemana } from "./SeletorSemana";
 import { FuncionarioModal } from "@/components/funcionarios/FuncionarioModal";
 import { GestaoZonasModal } from "@/components/zonas/GestaoZonasModal";
-import type { Alerta, Funcionario, Turno, Zona } from "@/types/dominio";
+import type { Alerta, Funcionario, HorarioFuncionamento, Turno, Zona } from "@/types/dominio";
 
 interface PainelEscalasProps {
   escalaId: string;
@@ -16,6 +16,7 @@ interface PainelEscalasProps {
   alertas: Alerta[];
   dias: Date[];
   diasFuncionamento: number[];
+  horarios: HorarioFuncionamento[];
   offsetAtual: number;
 }
 
@@ -28,6 +29,7 @@ export function PainelEscalas({
   alertas,
   dias,
   diasFuncionamento,
+  horarios,
   offsetAtual,
 }: PainelEscalasProps) {
   const [modalFuncionario, setModalFuncionario] = useState<Funcionario | "novo" | null>(null);
@@ -46,6 +48,7 @@ export function PainelEscalas({
         alertas={alertas}
         dias={dias}
         diasFuncionamento={diasFuncionamento}
+        horarios={horarios}
         onAbrirNovoFuncionario={() => setModalFuncionario("novo")}
         onAbrirGestaoZonas={() => setModalZonas(true)}
         onEditarFuncionario={(f) => setModalFuncionario(f)}

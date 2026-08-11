@@ -22,16 +22,13 @@ export interface Restaurante {
   pais: "BR" | "PT";
   moeda: "BRL" | "EUR";
   usaZonas: boolean;
-  // --- plano / assinatura ---
   plano: Plano;
   maxFuncionarios: number;
   permiteIA: boolean;
   statusAssinatura: StatusAssinatura;
-  trialEndsAt: string; // ISO datetime
-  // --- perfil financeiro padrão (herdado pelos funcionários) ---
+  trialEndsAt: string;
   valorHoraPadrao: number;
   frequenciaPagamentoPadrao: FrequenciaPagamento;
-  // --- onboarding operacional ---
   onboardingConcluido: boolean;
   diasFuncionamento: number[]; // 0=Segunda ... 6=Domingo
   coberturaFdsPrioritaria: boolean;
@@ -79,16 +76,20 @@ export interface Funcionario {
   folgasObrigatorias: number;
   disponibilidade: DisponibilidadeDia[];
   ativo: boolean;
-  valorHora: number | null;
-  frequenciaPagamento: FrequenciaPagamento | null;
+  valorHora: number | null; // null = herda valorHoraPadrao do restaurante
+  frequenciaPagamento: FrequenciaPagamento | null; // sugestão de cadência, não trava o pagamento
+  pausaAlmocoMinutos: number; // descontado das horas de cada turno fechado (com saída registrada)
 }
 
+/** Turno planejado na grade. horaInicio/horaFim alimentam a agenda por hora. */
 export interface Turno {
   id: string;
   funcionarioId: string;
   zonaId: string | null;
   periodo: Periodo;
-  dia: number;
+  dia: number; // 0-6, relativo à semana exibida
+  horaInicio: string | null; // "HH:MM"
+  horaFim: string | null;
 }
 
 export type NivelAlerta = "critico" | "atencao";
@@ -100,22 +101,35 @@ export interface Alerta {
   nivel: NivelAlerta;
 }
 
+/** Uma batida de ponto — entrada obrigatória, saída null enquanto em andamento. */
+export interface RegistroPonto {
+  id: string;
+  funcionarioId: string;
+  entrada: string; // ISO datetime
+  saida: string | null;
+  horasTrabalhadas: number | null; // calculado pelo banco quando saida existe
+}
+
+/**
+ * Resumo do saldo pendente de pagamento — não é mais um "ciclo
+ * calendário", é tudo que foi trabalhado (via registros_ponto) desde
+ * o último pagamento (ou desde sempre, se nunca foi pago).
+ */
 export interface ResumoPagamento {
-  frequencia: FrequenciaPagamento;
-  cicloInicio: string;
-  cicloFim: string;
-  horasTrabalhadas: number;
+  desde: string; // ISO datetime — início da janela sendo somada
+  horasTrabalhadas: number; // já inclui o ponto em andamento, se houver, calculado até agora
   valorHora: number;
   valorTotal: number;
-  jaPago: boolean;
+  pontoEmAberto: boolean; // true = tem um registro sem saída agora
+  ultimoPagamentoEm: string | null;
 }
 
 export interface PagamentoHistorico {
   id: string;
   funcionarioId: string;
-  cicloInicio: string;
-  cicloFim: string;
-  horasTrabalhadas: number;
+  periodoInicio: string;
+  periodoFim: string;
+  horasPagas: number;
   valorPago: number;
   pagoEm: string;
 }

@@ -2,7 +2,6 @@ import { createClient } from "@/lib/supabase/server";
 import { toISODate } from "@/lib/dates";
 import type { Periodo, Turno } from "@/types/dominio";
 
-/** Busca a escala da semana; cria uma em rascunho se ainda não existir. */
 export async function getOuCriarEscala(restauranteId: string, inicio: Date, fim: Date) {
   const supabase = await createClient();
   const semanaInicio = toISODate(inicio);
@@ -35,7 +34,7 @@ export async function getTurnos(escalaId: string): Promise<Turno[]> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("turnos")
-    .select("id, funcionario_id, zona_id, dia_semana, periodo")
+    .select("id, funcionario_id, zona_id, dia_semana, periodo, hora_inicio, hora_fim")
     .eq("escala_id", escalaId);
 
   if (error) throw new Error(`Falha ao buscar turnos: ${error.message}`);
@@ -46,6 +45,8 @@ export async function getTurnos(escalaId: string): Promise<Turno[]> {
     zonaId: t.zona_id,
     periodo: t.periodo as Periodo,
     dia: t.dia_semana,
+    horaInicio: t.hora_inicio ? String(t.hora_inicio).slice(0, 5) : null,
+    horaFim: t.hora_fim ? String(t.hora_fim).slice(0, 5) : null,
   }));
 }
 

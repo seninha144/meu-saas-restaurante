@@ -51,13 +51,23 @@ export async function salvarFuncionario(
   const folgasObrigatorias = Number(formData.get("folgasObrigatorias") ?? 2);
   const valorHoraRaw = String(formData.get("valorHora") ?? "");
   const frequenciaPagamento = String(formData.get("frequenciaPagamento") ?? "") || null;
+  const pausaAlmocoMinutos = Number(formData.get("pausaAlmocoMinutos") ?? 30);
 
   if (!nome || !cargo) {
     return { erro: "Nome e cargo são obrigatórios." };
   }
 
-  // Limite do plano — só checa em criação (id vazio); editar um
-  // funcionário existente nunca deveria esbarrar nesse teto.
+  // Trava de valor negativo — validado aqui além do input min=0 no
+  // client (que o usuário pode contornar digitando direto) e da CHECK
+  // constraint no banco (última linha de defesa). As três camadas
+  // juntas é o padrão certo, não redundância à toa.
+  if (valorHoraRaw && Number(valorHoraRaw) < 0) {
+    return { erro: "O valor/hora não pode ser negativo." };
+  }
+  if (pausaAlmocoMinutos < 0) {
+    return { erro: "A pausa de almoço não pode ser negativa." };
+  }
+
   if (!id) {
     const { count } = await supabase
       .from("funcionarios")
@@ -89,6 +99,7 @@ export async function salvarFuncionario(
     folgas_obrigatorias_semana: folgasObrigatorias,
     valor_hora: valorHoraRaw ? Number(valorHoraRaw) : null,
     frequencia_pagamento: frequenciaPagamento,
+    pausa_almoco_minutos: pausaAlmocoMinutos,
     tipo_contrato: "full_time" as const,
     modalidade_pagamento: "mes" as const,
   };
@@ -132,7 +143,6 @@ export async function desativarFuncionario(funcionarioId: string): Promise<void>
   revalidatePath("/escalas");
 }
 
-/** Chamada direta pelo client (FuncionarioModal) pra popular o card de pagamento ao abrir a ficha. */
 export async function getResumoPagamentoAction(funcionarioId: string): Promise<ResumoPagamento | { erro: string }> {
   const gerente = await requireGerente();
   try {
@@ -142,31 +152,78 @@ export async function getResumoPagamentoAction(funcionarioId: string): Promise<R
   }
 }
 
+export interface PontoState {
+  erro?: string;
+  emAberto?: boolean;
+}
+
+/**
+ * Alterna o ponto: se há um registro sem saída, fecha ele (saida =
+ * agora); senão, abre um novo (entrada = agora). É por isso que o
+ * ponto conta progressivamente — enquanto está aberto, o resumo
+ * calcula "agora - entrada" toda vez que é consultado.
+ */
+export async function baterPonto(funcionarioId: string): Promise<PontoState> {
+  const gerente = await requireGerente();
+  const supabase = await createClient();
+
+  const { data: aberto } = await supabase
+    .from("registros_ponto")
+    .select("id")
+    .eq("funcionario_id", funcionarioId)
+    .is("saida", null)
+    .maybeSingle();
+
+  if (aberto) {
+    const { error } = await supabase
+      .from("registros_ponto")
+      .update({ saida: new Date().toISOString() })
+      .eq("id", aberto.id);
+    if (error) return { erro: `Falha ao registrar saída: ${error.message}` };
+    revalidatePath("/escalas");
+    return { emAberto: false };
+  }
+
+  const { error } = await supabase.from("registros_ponto").insert({
+    restaurante_id: gerente.restauranteId,
+    funcionario_id: funcionarioId,
+    entrada: new Date().toISOString(),
+  });
+  if (error) return { erro: `Falha ao registrar entrada: ${error.message}` };
+  revalidatePath("/escalas");
+  return { emAberto: true };
+}
+
 export interface MarcarPagoState {
   erro?: string;
   sucesso?: boolean;
 }
 
 /**
- * Grava a quitação em pagamentos_historico. A unique constraint em
- * (funcionario_id, ciclo_inicio, ciclo_fim) impede duplicar o
- * pagamento do mesmo ciclo — se já existir, o insert falha e a gente
- * trata como "já estava pago" em vez de erro.
+ * Quita TUDO que está pendente (desde o último pagamento até agora) e
+ * grava periodo_fim = agora. A próxima consulta de resumo só soma o
+ * que acontecer depois disso — é isso que "zera" o saldo.
  */
 export async function marcarComoPago(funcionarioId: string): Promise<MarcarPagoState> {
   const gerente = await requireGerente();
   const supabase = await createClient();
 
   const resumo = await getResumoPagamento(funcionarioId, gerente.restauranteId);
-  if (resumo.jaPago) {
-    return { sucesso: true };
+
+  if (resumo.horasTrabalhadas === 0) {
+    return { erro: "Não há horas pendentes para pagar." };
   }
+  if (resumo.pontoEmAberto) {
+    return { erro: "Feche o ponto em aberto (bata a saída) antes de marcar como pago." };
+  }
+
+  const agora = new Date().toISOString();
 
   const { error } = await supabase.from("pagamentos_historico").insert({
     restaurante_id: gerente.restauranteId,
     funcionario_id: funcionarioId,
-    ciclo_inicio: resumo.cicloInicio,
-    ciclo_fim: resumo.cicloFim,
+    periodo_inicio: resumo.desde,
+    periodo_fim: agora,
     horas_trabalhadas: resumo.horasTrabalhadas,
     valor_pago: resumo.valorTotal,
     pago_por: gerente.id,

@@ -1,15 +1,17 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-/**
- * Roda em toda requisição (exceto assets estáticos, ver `config.matcher`).
- * Duas responsabilidades:
- * 1. Refrescar o token de sessão do Supabase (senão a sessão expira em
- *    componentes de servidor mesmo com o usuário ativo no navegador).
- * 2. Redirecionar por papel: visitante sem sessão -> /login; gerente
- *    tentando entrar em /gerentes (área do super_admin) -> bloqueado.
- */
 export async function middleware(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+
+  // Rotas de API se autenticam sozinhas (ex: bearer token do cron) —
+  // nunca devem passar pela checagem de sessão/cookie abaixo, senão
+  // o middleware redireciona a requisição pro /login e ela nunca
+  // chega no Route Handler. Esse era o motivo do cron nunca rodar.
+  if (path.startsWith("/api/")) {
+    return NextResponse.next();
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -35,8 +37,11 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const path = request.nextUrl.pathname;
-  const rotaPublica = path === "/login";
+  // Únicas rotas acessíveis SEM sessão. Tudo que precisa de sessão mas
+  // não de assinatura ativa (onboarding, bloqueio) fica de fora dessa
+  // lista de propósito — precisa estar logado pra chegar lá, só não
+  // precisa ter completado onboarding/pagamento ainda.
+  const rotaPublica = path === "/login" || path === "/registro";
 
   if (!user && !rotaPublica) {
     const url = request.nextUrl.clone();

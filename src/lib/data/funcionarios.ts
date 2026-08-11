@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { DisponibilidadeDia, Funcionario, FrequenciaPagamento, Periodo } from "@/types/dominio";
 
-const DURACAO_PADRAO_HORAS = 8; // usado no cálculo de horasSemana quando não há hora_inicio/fim
+const DURACAO_PADRAO_HORAS = 8;
 
 export async function getFuncionarios(restauranteId: string, semanaInicioISO: string): Promise<Funcionario[]> {
   const supabase = await createClient();
@@ -9,7 +9,7 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
   const { data: funcionariosRaw, error } = await supabase
     .from("funcionarios")
     .select(
-      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento"
+      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento, pausa_almoco_minutos"
     )
     .eq("restaurante_id", restauranteId)
     .eq("ativo", true);
@@ -62,6 +62,7 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
       ativo: f.ativo,
       valorHora: f.valor_hora === null ? null : Number(f.valor_hora),
       frequenciaPagamento: f.frequencia_pagamento as FrequenciaPagamento | null,
+      pausaAlmocoMinutos: f.pausa_almoco_minutos ?? 30,
     };
   });
 }

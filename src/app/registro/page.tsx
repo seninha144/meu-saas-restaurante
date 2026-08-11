@@ -6,6 +6,7 @@ import { registrarRestaurante, type RegistroState } from "./actions";
 
 const estadoInicial: RegistroState = {};
 const TOTAL_PASSOS = 3;
+const selectDarkStyle = { colorScheme: "dark" as const };
 
 export default function RegistroPage() {
   const [state, formAction, pending] = useActionState(registrarRestaurante, estadoInicial);
@@ -52,6 +53,7 @@ export default function RegistroPage() {
               label="Quantidade estimada de funcionários (você incluído)"
               name="totalFuncionarios"
               type="number"
+              min="1"
               defaultValue={10}
             />
             <Campo
@@ -59,6 +61,7 @@ export default function RegistroPage() {
               name="valorHoraPadrao"
               type="number"
               step="0.01"
+              min="0"
               placeholder="Ex: 7.50"
             />
             <p className="text-xs text-white/30">
@@ -74,6 +77,7 @@ export default function RegistroPage() {
               <select
                 name="frequenciaPagamentoPadrao"
                 defaultValue="mes"
+                style={selectDarkStyle}
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50"
               >
                 <option value="dia">Diária</option>
@@ -137,6 +141,7 @@ function Campo({
   defaultValue,
   placeholder,
   step,
+  min,
   required,
 }: {
   label: string;
@@ -145,6 +150,7 @@ function Campo({
   defaultValue?: string | number;
   placeholder?: string;
   step?: string;
+  min?: string;
   required?: boolean;
 }) {
   return (
@@ -154,6 +160,7 @@ function Campo({
         name={name}
         type={type}
         step={step}
+        min={min}
         defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}

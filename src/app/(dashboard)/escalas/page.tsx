@@ -2,12 +2,10 @@ import { requireGerente } from "@/lib/auth/permissions";
 import { getRestaurante, getZonas } from "@/lib/data/queries";
 import { getFuncionarios } from "@/lib/data/funcionarios";
 import { getOuCriarEscala, getTurnos, getAlertasCobertura } from "@/lib/data/escalas";
+import { getHorarios } from "@/lib/data/horarios";
 import { getSemana, toISODate } from "@/lib/dates";
 import { PainelEscalas } from "@/components/escalas/PainelEscalas";
 
-// Força essa página a nunca ser cacheada estaticamente — ela depende
-// da data atual do momento da requisição (semana corrente) e de
-// query params de navegação, então cache estático é incorreto aqui.
 export const dynamic = "force-dynamic";
 
 interface EscalasPageProps {
@@ -23,10 +21,11 @@ export default async function EscalasPage({ searchParams }: EscalasPageProps) {
   const { inicio, fim, dias } = getSemana(offsetAtual);
   const semanaInicioISO = toISODate(inicio);
 
-  const [restaurante, zonas, funcionarios] = await Promise.all([
+  const [restaurante, zonas, funcionarios, horarios] = await Promise.all([
     getRestaurante(gerente.restauranteId),
     getZonas(gerente.restauranteId),
     getFuncionarios(gerente.restauranteId, semanaInicioISO),
+    getHorarios(gerente.restauranteId),
   ]);
 
   const escala = await getOuCriarEscala(gerente.restauranteId, inicio, fim);
@@ -50,6 +49,7 @@ export default async function EscalasPage({ searchParams }: EscalasPageProps) {
         alertas={alertas}
         dias={dias}
         diasFuncionamento={restaurante.diasFuncionamento}
+        horarios={horarios}
         offsetAtual={offsetAtual}
       />
     </div>

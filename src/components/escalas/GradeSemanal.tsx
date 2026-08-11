@@ -4,12 +4,12 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FileDown, MessageCircle, Sparkles, Loader2 } from "lucide-react";
 import { formatarDiaHeader } from "@/lib/dates";
-import type { Funcionario, Turno, Zona } from "@/types/dominio";
+import type { Funcionario, HorarioFuncionamento, Periodo, Turno, Zona } from "@/types/dominio";
 import { GapAlerta } from "./GapAlerta";
 import { gerarEscalaAutomatica } from "@/app/(dashboard)/escalas/actions";
 import type { Alerta } from "@/types/dominio";
 
-const HORAS_POR_TURNO = 8; // mesma estimativa usada no resto do projeto
+const ALTURA_HORA_PX = 56;
 
 interface GradeSemanalProps {
   escalaId: string;
@@ -19,10 +19,52 @@ interface GradeSemanalProps {
   turnos: Turno[];
   alertas: Alerta[];
   dias: Date[];
-  diasFuncionamento: number[]; // 0-6 — dias em que o restaurante abre
+  diasFuncionamento: number[];
+  horarios: HorarioFuncionamento[];
   onAbrirNovoFuncionario: () => void;
   onAbrirGestaoZonas: () => void;
   onEditarFuncionario: (funcionario: Funcionario) => void;
+}
+
+function paraMinutos(hora: string): number {
+  const [h, m] = hora.split(":").map(Number);
+  return h * 60 + (m || 0);
+}
+
+/** Fallback pra turnos antigos sem hora_inicio/hora_fim gravado (dados de antes dessa mudança). */
+const JANELA_FALLBACK: Record<Periodo, [string, string]> = {
+  Manhã: ["08:00", "12:00"],
+  Tarde: ["12:00", "17:00"],
+  Noite: ["17:00", "21:00"],
+  Fechamento: ["21:00", "23:59"],
+};
+
+interface BlocoTurno {
+  turno: Turno;
+  funcionario: Funcionario;
+  zona: Zona | null;
+  inicioMin: number;
+  fimMin: number;
+  lane: number;
+  totalLanes: number;
+}
+
+/** Atribui "faixas" (lanes) pra turnos que se sobrepõem no mesmo dia, tipo Google Calendar. */
+function atribuirLanes(blocos: Omit<BlocoTurno, "lane" | "totalLanes">[]): BlocoTurno[] {
+  const ordenados = [...blocos].sort((a, b) => a.inicioMin - b.inicioMin);
+  const fimPorLane: number[] = [];
+  const comLane = ordenados.map((b) => {
+    let lane = fimPorLane.findIndex((fim) => fim <= b.inicioMin);
+    if (lane === -1) {
+      lane = fimPorLane.length;
+      fimPorLane.push(b.fimMin);
+    } else {
+      fimPorLane[lane] = b.fimMin;
+    }
+    return { ...b, lane };
+  });
+  const totalLanes = Math.max(fimPorLane.length, 1);
+  return comLane.map((b) => ({ ...b, totalLanes }));
 }
 
 export function GradeSemanal({
@@ -34,6 +76,7 @@ export function GradeSemanal({
   alertas,
   dias,
   diasFuncionamento,
+  horarios,
   onAbrirNovoFuncionario,
   onAbrirGestaoZonas,
   onEditarFuncionario,
@@ -62,29 +105,69 @@ export function GradeSemanal({
     });
   }
 
-  const turnosPorFuncionarioDia = useMemo(() => {
-    const map = new Map<string, Turno>(); // chave: `${funcionarioId}:${dia}`
-    turnos.forEach((t) => map.set(`${t.funcionarioId}:${t.dia}`, t));
+  const funcionarioPorId = useMemo(() => {
+    const map = new Map<string, Funcionario>();
+    funcionarios.forEach((f) => map.set(f.id, f));
     return map;
-  }, [turnos]);
+  }, [funcionarios]);
 
-  const horasSemanaPorFuncionario = useMemo(() => {
-    const map = new Map<string, number>();
-    funcionarios.forEach((f) => map.set(f.id, 0));
-    turnos.forEach((t) => map.set(t.funcionarioId, (map.get(t.funcionarioId) ?? 0) + HORAS_POR_TURNO));
+  const zonaPorId = useMemo(() => {
+    const map = new Map<string, Zona>();
+    zonas.forEach((z) => map.set(z.id, z));
     return map;
-  }, [funcionarios, turnos]);
+  }, [zonas]);
 
-  const grupos: { zona: Zona | null; funcionarios: Funcionario[] }[] = useMemo(() => {
-    if (!usaZonas) {
-      return [{ zona: null, funcionarios }];
+  const turnosFiltrados = useMemo(() => {
+    if (!usaZonas || zonaFiltro === "todas") return turnos;
+    return turnos.filter((t) => t.zonaId === zonaFiltro);
+  }, [turnos, usaZonas, zonaFiltro]);
+
+  // eixo vertical: da abertura mais cedo até o fechamento mais tarde,
+  // considerando só os dias que de fato abrem — arredondado pra hora cheia
+  const { minMinutos, maxMinutos, horasEixo } = useMemo(() => {
+    const abertos = horarios.filter((h) => !h.fechado && diasFuncionamento.includes(h.diaSemana));
+    const aberturas = abertos.map((h) => paraMinutos(h.horaAbertura ?? "09:00"));
+    const fechamentos = abertos.map((h) => paraMinutos(h.horaFechamento ?? "23:00"));
+
+    const min = aberturas.length ? Math.floor(Math.min(...aberturas) / 60) * 60 : 9 * 60;
+    const max = fechamentos.length ? Math.ceil(Math.max(...fechamentos) / 60) * 60 : 23 * 60;
+
+    const horas: number[] = [];
+    for (let h = min; h <= max; h += 60) horas.push(h);
+
+    return { minMinutos: min, maxMinutos: max, horasEixo: horas };
+  }, [horarios, diasFuncionamento]);
+
+  const alturaTotalPx = ((maxMinutos - minMinutos) / 60) * ALTURA_HORA_PX;
+
+  const blocosPorDia = useMemo(() => {
+    const mapa = new Map<number, BlocoTurno[]>();
+
+    for (let dia = 0; dia < 7; dia++) {
+      const doDia = turnosFiltrados.filter((t) => t.dia === dia);
+
+      const brutos = doDia
+        .map((t) => {
+          const f = funcionarioPorId.get(t.funcionarioId);
+          if (!f) return null;
+          const [fallbackInicio, fallbackFim] = JANELA_FALLBACK[t.periodo];
+          const inicioStr = t.horaInicio ?? fallbackInicio;
+          const fimStr = t.horaFim ?? fallbackFim;
+          return {
+            turno: t,
+            funcionario: f,
+            zona: t.zonaId ? zonaPorId.get(t.zonaId) ?? null : null,
+            inicioMin: paraMinutos(inicioStr),
+            fimMin: paraMinutos(fimStr),
+          };
+        })
+        .filter((b): b is NonNullable<typeof b> => b !== null);
+
+      mapa.set(dia, atribuirLanes(brutos));
     }
-    const zonasFiltradas = zonaFiltro === "todas" ? zonas : zonas.filter((z) => z.id === zonaFiltro);
-    return zonasFiltradas.map((zona) => ({
-      zona,
-      funcionarios: funcionarios.filter((f) => f.zonaId === zona.id),
-    }));
-  }, [usaZonas, zonas, zonaFiltro, funcionarios]);
+
+    return mapa;
+  }, [turnosFiltrados, funcionarioPorId, zonaPorId]);
 
   return (
     <div>
@@ -160,13 +243,12 @@ export function GradeSemanal({
 
       {resultadoGeracao && <p className="mt-2 text-xs text-white/40">{resultadoGeracao}</p>}
 
-      {/* ============================ GRADE ============================ */}
+      {/* ============================ AGENDA POR HORA ============================ */}
       <div className="mt-6 overflow-x-auto rounded-2xl border border-white/[0.06]">
         <div className="min-w-[980px]">
-          <div className="grid grid-cols-[200px_repeat(7,1fr)] border-b border-white/[0.06] bg-white/[0.02]">
-            <div className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-white/30">
-              Colaborador · horas/semana
-            </div>
+          {/* cabeçalho dos dias */}
+          <div className="grid grid-cols-[64px_repeat(7,1fr)] border-b border-white/[0.06] bg-white/[0.02]">
+            <div className="px-2 py-3" />
             {dias.map((dia, i) => {
               const { abrev, numero } = formatarDiaHeader(dia);
               const aberto = diasFuncionamento.includes(i);
@@ -183,79 +265,90 @@ export function GradeSemanal({
             })}
           </div>
 
-          {grupos.map(({ zona, funcionarios: funcionariosDoGrupo }, idx) => (
-            <div key={zona?.id ?? "sem-zona"} className={idx !== grupos.length - 1 ? "border-b border-white/[0.06]" : ""}>
-              {zona && (
-                <div className="flex items-center gap-2 border-b border-white/[0.03] bg-white/[0.015] px-4 py-2">
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: zona.cor }} />
-                  <span className="text-xs font-semibold uppercase tracking-wide text-white/60">{zona.nome}</span>
+          {/* corpo: eixo de horas + colunas de dias com blocos posicionados */}
+          <div className="grid grid-cols-[64px_repeat(7,1fr)]">
+            {/* eixo de horas */}
+            <div className="relative border-r border-white/[0.04]" style={{ height: alturaTotalPx }}>
+              {horasEixo.map((min) => (
+                <div
+                  key={min}
+                  className="absolute right-2 -translate-y-1/2 text-[10px] text-white/25"
+                  style={{ top: ((min - minMinutos) / 60) * ALTURA_HORA_PX }}
+                >
+                  {String(Math.floor(min / 60)).padStart(2, "0")}:00
                 </div>
-              )}
+              ))}
+            </div>
 
-              {funcionariosDoGrupo.length === 0 && (
-                <div className="px-4 py-3 text-xs text-white/20">Nenhum funcionário vinculado a esta zona.</div>
-              )}
+            {dias.map((_, diaIdx) => {
+              const aberto = diasFuncionamento.includes(diaIdx);
+              const blocos = blocosPorDia.get(diaIdx) ?? [];
 
-              {funcionariosDoGrupo.map((f) => {
-                const horas = horasSemanaPorFuncionario.get(f.id) ?? 0;
-                const sobrecarregado = horas > f.cargaHorariaSemanalMax;
+              return (
+                <div
+                  key={diaIdx}
+                  className={`relative border-l border-white/[0.03] ${!aberto ? "bg-white/[0.008]" : ""}`}
+                  style={{ height: alturaTotalPx }}
+                >
+                  {/* linhas de hora de fundo */}
+                  {horasEixo.map((min) => (
+                    <div
+                      key={min}
+                      className="absolute left-0 right-0 border-t border-white/[0.03]"
+                      style={{ top: ((min - minMinutos) / 60) * ALTURA_HORA_PX }}
+                    />
+                  ))}
 
-                return (
-                  <div
-                    key={f.id}
-                    className="grid grid-cols-[200px_repeat(7,1fr)] border-b border-white/[0.03] last:border-b-0"
-                  >
-                    <button
-                      onClick={() => onEditarFuncionario(f)}
-                      className="flex flex-col items-start gap-1 px-4 py-3 text-left transition hover:bg-white/[0.03]"
-                    >
-                      <span className="truncate text-sm font-medium text-white/90">{f.nome}</span>
-                      <span className="truncate text-[10px] text-white/35">{f.cargo}</span>
-                      <span
-                        className={`mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                          sobrecarregado ? "bg-[#E5484D]/15 text-[#E5484D]" : "bg-white/[0.06] text-white/50"
-                        }`}
-                      >
-                        {horas}h / {f.cargaHorariaSemanalMax}h
-                      </span>
-                    </button>
+                  {!aberto && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="rotate-90 text-[10px] tracking-wide text-white/10">Fechado</span>
+                    </div>
+                  )}
 
-                    {dias.map((_, diaIdx) => {
-                      const turno = turnosPorFuncionarioDia.get(`${f.id}:${diaIdx}`);
-                      const aberto = diasFuncionamento.includes(diaIdx);
+                  {aberto &&
+                    blocos.map((b) => {
+                      const top = Math.max(((b.inicioMin - minMinutos) / 60) * ALTURA_HORA_PX, 0);
+                      const altura = Math.max(((b.fimMin - b.inicioMin) / 60) * ALTURA_HORA_PX, 20);
+                      const largura = 100 / b.totalLanes;
+                      const cor = b.zona?.cor ?? "#8B92A0";
 
                       return (
-                        <div
-                          key={diaIdx}
-                          className={`flex min-h-[56px] items-center justify-center border-l border-white/[0.03] p-1.5 ${
-                            !aberto ? "bg-white/[0.008]" : ""
-                          }`}
+                        <button
+                          key={b.turno.id}
+                          onClick={() => onEditarFuncionario(b.funcionario)}
+                          className="absolute overflow-hidden rounded-md border px-1.5 py-1 text-left transition hover:brightness-110"
+                          style={{
+                            top,
+                            height: altura,
+                            left: `${b.lane * largura}%`,
+                            width: `calc(${largura}% - 3px)`,
+                            backgroundColor: `${cor}22`,
+                            borderColor: `${cor}55`,
+                          }}
                         >
-                          {!aberto ? (
-                            <span className="text-[10px] text-white/10">Fechado</span>
-                          ) : turno ? (
-                            <button
-                              onClick={() => onEditarFuncionario(f)}
-                              className="flex flex-col items-center rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1.5 transition hover:border-white/15 hover:bg-white/[0.05]"
-                            >
-                              <span className="text-sm font-semibold text-white/85">{HORAS_POR_TURNO}h</span>
-                              <span className="text-[9px] text-white/35">{turno.periodo}</span>
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-white/15">—</span>
-                          )}
-                        </div>
+                          <p className="truncate text-[10px] font-semibold" style={{ color: cor }}>
+                            {b.funcionario.nome}
+                          </p>
+                          <p className="truncate text-[9px] text-white/40">
+                            {formatarHora(b.inicioMin)}–{formatarHora(b.fimMin)}
+                          </p>
+                        </button>
                       );
                     })}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function formatarHora(minutos: number): string {
+  const h = Math.floor(minutos / 60);
+  const m = Math.round(minutos % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 function FiltroChip({
