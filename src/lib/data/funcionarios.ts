@@ -1,7 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import type { DisponibilidadeDia, Funcionario, FrequenciaPagamento, Periodo } from "@/types/dominio";
 
-const DURACAO_PADRAO_HORAS = 8;
+function duracaoHoras(horaInicio: string | null, horaFim: string | null): number {
+  if (!horaInicio || !horaFim) return 8; // fallback pra turnos legados sem horário gravado
+  const [hi, mi] = horaInicio.split(":").map(Number);
+  const [hf, mf] = horaFim.split(":").map(Number);
+  return Math.max(hf + mf / 60 - (hi + mi / 60), 0);
+}
 
 export async function getFuncionarios(restauranteId: string, semanaInicioISO: string): Promise<Funcionario[]> {
   const supabase = await createClient();
@@ -9,7 +14,7 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
   const { data: funcionariosRaw, error } = await supabase
     .from("funcionarios")
     .select(
-      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento, pausa_almoco_minutos"
+      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento, pausa_almoco_minutos, eh_gerencia"
     )
     .eq("restaurante_id", restauranteId)
     .eq("ativo", true);
@@ -29,8 +34,8 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
     .maybeSingle();
 
   const { data: turnosSemana } = escala
-    ? await supabase.from("turnos").select("funcionario_id, dia_semana").eq("escala_id", escala.id)
-    : { data: [] as { funcionario_id: string; dia_semana: number }[] };
+    ? await supabase.from("turnos").select("funcionario_id, dia_semana, hora_inicio, hora_fim").eq("escala_id", escala.id)
+    : { data: [] as { funcionario_id: string; dia_semana: number; hora_inicio: string | null; hora_fim: string | null }[] };
 
   return (funcionariosRaw ?? []).map((f) => {
     const disponibilidade: DisponibilidadeDia[] = Array.from({ length: 7 }, (_, dia) => {
@@ -44,6 +49,10 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
 
     const turnosDoFuncionario = (turnosSemana ?? []).filter((t) => t.funcionario_id === f.id);
     const diasTrabalhados = new Set(turnosDoFuncionario.map((t) => t.dia_semana)).size;
+    const horasSemana = turnosDoFuncionario.reduce(
+      (soma, t) => soma + duracaoHoras(t.hora_inicio?.slice(0, 5) ?? null, t.hora_fim?.slice(0, 5) ?? null),
+      0
+    );
 
     return {
       id: f.id,
@@ -54,7 +63,7 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
       iniciais: iniciaisDe(f.nome),
       idade: f.idade,
       genero: f.genero,
-      horasSemana: diasTrabalhados * DURACAO_PADRAO_HORAS,
+      horasSemana: Math.round(horasSemana * 100) / 100,
       cargaHorariaSemanalMax: Number(f.carga_horaria_semanal_max),
       folgasUsadas: 7 - diasTrabalhados,
       folgasObrigatorias: f.folgas_obrigatorias_semana,
@@ -63,6 +72,7 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
       valorHora: f.valor_hora === null ? null : Number(f.valor_hora),
       frequenciaPagamento: f.frequencia_pagamento as FrequenciaPagamento | null,
       pausaAlmocoMinutos: f.pausa_almoco_minutos ?? 30,
+      ehGerencia: f.eh_gerencia ?? false,
     };
   });
 }

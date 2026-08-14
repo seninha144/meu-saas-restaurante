@@ -37,7 +37,7 @@ export interface Restaurante {
 export interface HorarioFuncionamento {
   diaSemana: number;
   fechado: boolean;
-  horaAbertura: string | null; // "HH:MM"
+  horaAbertura: string | null;
   horaFechamento: string | null;
 }
 
@@ -76,20 +76,21 @@ export interface Funcionario {
   folgasObrigatorias: number;
   disponibilidade: DisponibilidadeDia[];
   ativo: boolean;
-  valorHora: number | null; // null = herda valorHoraPadrao do restaurante
-  frequenciaPagamento: FrequenciaPagamento | null; // sugestão de cadência, não trava o pagamento
-  pausaAlmocoMinutos: number; // descontado das horas de cada turno fechado (com saída registrada)
+  valorHora: number | null;
+  frequenciaPagamento: FrequenciaPagamento | null;
+  pausaAlmocoMinutos: number;
+  ehGerencia: boolean;
 }
 
-/** Turno planejado na grade. horaInicio/horaFim alimentam a agenda por hora. */
 export interface Turno {
   id: string;
   funcionarioId: string;
   zonaId: string | null;
   periodo: Periodo;
-  dia: number; // 0-6, relativo à semana exibida
-  horaInicio: string | null; // "HH:MM"
+  dia: number;
+  horaInicio: string | null;
   horaFim: string | null;
+  foraPreferencia: boolean;
 }
 
 export type NivelAlerta = "critico" | "atencao";
@@ -101,27 +102,29 @@ export interface Alerta {
   nivel: NivelAlerta;
 }
 
-/** Uma batida de ponto — entrada obrigatória, saída null enquanto em andamento. */
 export interface RegistroPonto {
   id: string;
   funcionarioId: string;
-  entrada: string; // ISO datetime
+  entrada: string;
   saida: string | null;
-  horasTrabalhadas: number | null; // calculado pelo banco quando saida existe
+  horasTrabalhadas: number | null;
+  pago: boolean;
 }
 
 /**
- * Resumo do saldo pendente de pagamento — não é mais um "ciclo
- * calendário", é tudo que foi trabalhado (via registros_ponto) desde
- * o último pagamento (ou desde sempre, se nunca foi pago).
+ * Saldo pendente = horas de pontos JÁ FECHADOS e NÃO PAGOS, mais as
+ * horas do ponto em andamento (se houver) calculadas até agora — mas
+ * o ponto em andamento é só informativo aqui, "Pagamento Feito" só
+ * quita o que já está fechado.
  */
 export interface ResumoPagamento {
-  desde: string; // ISO datetime — início da janela sendo somada
-  horasTrabalhadas: number; // já inclui o ponto em andamento, se houver, calculado até agora
+  horasFinalizadasNaoPagas: number;
+  valorFinalizadoNaoPago: number;
+  horasEmAndamento: number;
+  valorEmAndamento: number;
   valorHora: number;
-  valorTotal: number;
-  pontoEmAberto: boolean; // true = tem um registro sem saída agora
-  ultimoPagamentoEm: string | null;
+  pontoEmAberto: boolean;
+  desdeMaisAntigo: string | null; // entrada do ponto não pago mais antigo, referência de "desde quando"
 }
 
 export interface PagamentoHistorico {

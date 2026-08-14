@@ -59,6 +59,7 @@ export function PainelEscalas({
           funcionario={modalFuncionario === "novo" ? null : modalFuncionario}
           zonas={zonas}
           usaZonas={usaZonas}
+          diasFuncionamento={diasFuncionamento}
           onFechar={() => setModalFuncionario(null)}
         />
       )}
