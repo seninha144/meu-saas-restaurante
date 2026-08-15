@@ -10,8 +10,13 @@ import {
   baterPonto,
   type FuncionarioFormState,
 } from "@/app/(dashboard)/funcionarios/actions";
-import type { Funcionario, Periodo, ResumoPagamento, Zona } from "@/types/dominio";
-import { PERIODOS } from "@/types/dominio";
+import type {
+  Funcionario,
+  PeriodoDisponibilidade,
+  ResumoPagamento,
+  Zona,
+} from "@/types/dominio";
+import { PERIODOS_DISPONIBILIDADE } from "@/types/dominio";
 
 interface FuncionarioModalProps {
   funcionario: Funcionario | null;
@@ -25,8 +30,17 @@ const estadoInicial: FuncionarioFormState = {};
 const selectDarkStyle = { colorScheme: "dark" as const };
 const DIAS_LABEL = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
-export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamento, onFechar }: FuncionarioModalProps) {
-  const [state, formAction, pending] = useActionState(salvarFuncionario, estadoInicial);
+export function FuncionarioModal({
+  funcionario,
+  zonas,
+  usaZonas,
+  diasFuncionamento,
+  onFechar,
+}: FuncionarioModalProps) {
+  const [state, formAction, pending] = useActionState(
+    salvarFuncionario,
+    estadoInicial
+  );
   const [removendo, setRemovendo] = useState(false);
 
   useEffect(() => {
@@ -48,7 +62,11 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
           <h2 className="font-[Space_Grotesk,system-ui,sans-serif] text-lg font-semibold">
             {funcionario ? "Editar funcionário" : "Novo funcionário"}
           </h2>
-          <button onClick={onFechar} className="text-white/40 hover:text-white/80">
+
+          <button
+            onClick={onFechar}
+            className="text-white/40 hover:text-white/80"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -56,15 +74,34 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
         {funcionario && <ResumoPagamentoCard funcionarioId={funcionario.id} />}
 
         <form action={formAction} className="mt-5 space-y-4">
-          {funcionario && <input type="hidden" name="id" value={funcionario.id} />}
+          {funcionario && (
+            <input type="hidden" name="id" value={funcionario.id} />
+          )}
 
           <div className="grid grid-cols-2 gap-3">
-            <Campo label="Nome" name="nome" defaultValue={funcionario?.nome} required className="col-span-2" />
-            <Campo label="Cargo" name="cargo" defaultValue={funcionario?.cargo} required />
+            <Campo
+              label="Nome"
+              name="nome"
+              defaultValue={funcionario?.nome}
+              required
+              className="col-span-2"
+            />
+
+            <Campo
+              label="Cargo"
+              name="cargo"
+              defaultValue={funcionario?.cargo}
+              required
+            />
+
             <div>
               <label className="mb-1.5 block text-xs font-medium text-white/50">
-                Zona {usaZonas && zonas.length > 0 && <span className="text-[#E8A33D]">*</span>}
+                Zona{" "}
+                {usaZonas && zonas.length > 0 && (
+                  <span className="text-[#E8A33D]">*</span>
+                )}
               </label>
+
               <select
                 name="zonaId"
                 defaultValue={funcionario?.zonaId ?? ""}
@@ -73,6 +110,7 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50 disabled:opacity-40"
               >
                 <option value="">Sem zona fixa</option>
+
                 {zonas.map((z) => (
                   <option key={z.id} value={z.id}>
                     {z.nome}
@@ -81,9 +119,19 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
               </select>
             </div>
 
-            <Campo label="Idade" name="idade" type="number" min="14" defaultValue={funcionario?.idade ?? undefined} />
+            <Campo
+              label="Idade"
+              name="idade"
+              type="number"
+              min="14"
+              defaultValue={funcionario?.idade ?? undefined}
+            />
+
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-white/50">Gênero</label>
+              <label className="mb-1.5 block text-xs font-medium text-white/50">
+                Gênero
+              </label>
+
               <select
                 name="genero"
                 defaultValue={funcionario?.genero ?? ""}
@@ -102,8 +150,11 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
               name="cargaHorariaSemanalMax"
               type="number"
               min="0"
-              defaultValue={funcionario?.cargaHorariaSemanalMax ?? 44}
+              defaultValue={
+                funcionario?.cargaHorariaSemanalMax ?? 44
+              }
             />
+
             <Campo
               label="Folgas obrigatórias/semana"
               name="folgasObrigatorias"
@@ -121,8 +172,12 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
               defaultValue={funcionario?.valorHora ?? undefined}
               placeholder="Herda do restaurante"
             />
+
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-white/50">Frequência de pagamento</label>
+              <label className="mb-1.5 block text-xs font-medium text-white/50">
+                Frequência de pagamento
+              </label>
+
               <select
                 name="frequenciaPagamento"
                 defaultValue={funcionario?.frequenciaPagamento ?? ""}
@@ -138,7 +193,10 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-white/50">Pausa de almoço</label>
+              <label className="mb-1.5 block text-xs font-medium text-white/50">
+                Pausa de almoço
+              </label>
+
               <select
                 name="pausaAlmocoMinutos"
                 defaultValue={funcionario?.pausaAlmocoMinutos ?? 30}
@@ -159,17 +217,29 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
                 defaultChecked={funcionario?.ehGerencia ?? false}
                 className="accent-[#9B7BD1]"
               />
+
               <span className="text-sm">Faz parte da gerência</span>
-              <span className="text-xs text-white/30">— aparece na aba "Gerência" da grade, separado da equipe geral</span>
+
+              <span className="text-xs text-white/30">
+                — aparece na aba "Gerência" da grade, separado da equipe geral
+              </span>
             </label>
           </div>
 
           <div>
-            <p className="mb-2 text-xs font-medium text-white/50">Disponibilidade / preferência de turnos</p>
-            <GradeDisponibilidade funcionario={funcionario} diasFuncionamento={diasFuncionamento} />
+            <p className="mb-2 text-xs font-medium text-white/50">
+              Disponibilidade / preferência de turnos
+            </p>
+
+            <GradeDisponibilidade
+              funcionario={funcionario}
+              diasFuncionamento={diasFuncionamento}
+            />
           </div>
 
-          {state.erro && <p className="text-sm text-[#E5484D]">{state.erro}</p>}
+          {state.erro && (
+            <p className="text-sm text-[#E5484D]">{state.erro}</p>
+          )}
 
           <div className="flex items-center justify-between pt-2">
             {funcionario ? (
@@ -179,11 +249,14 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
                 disabled={removendo}
                 className="text-sm font-medium text-[#E5484D]/80 hover:text-[#E5484D]"
               >
-                {removendo ? "Removendo…" : "Remover colaborador"}
+                {removendo
+                  ? "Removendo…"
+                  : "Remover colaborador"}
               </button>
             ) : (
               <span />
             )}
+
             <button
               type="submit"
               disabled={pending}
@@ -198,9 +271,14 @@ export function FuncionarioModal({ funcionario, zonas, usaZonas, diasFuncionamen
   );
 }
 
-function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
+function ResumoPagamentoCard({
+  funcionarioId,
+}: {
+  funcionarioId: string;
+}) {
   const [resumo, setResumo] = useState<ResumoPagamento | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+
   const [carregando, startCarregando] = useTransition();
   const [marcando, startMarcando] = useTransition();
   const [batendo, startBatendo] = useTransition();
@@ -208,8 +286,10 @@ function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
   function recarregar() {
     startCarregando(async () => {
       const resultado = await getResumoPagamentoAction(funcionarioId);
-      if ("erro" in resultado) setErro(resultado.erro);
-      else {
+
+      if ("erro" in resultado) {
+        setErro(resultado.erro);
+      } else {
         setErro(null);
         setResumo(resultado);
       }
@@ -218,41 +298,63 @@ function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
 
   useEffect(() => {
     recarregar();
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [funcionarioId]);
 
   useEffect(() => {
     if (!resumo?.pontoEmAberto) return;
+
     const intervalo = setInterval(recarregar, 60_000);
+
     return () => clearInterval(intervalo);
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumo?.pontoEmAberto]);
 
   function handleMarcarPago() {
     startMarcando(async () => {
       const resultado = await marcarComoPago(funcionarioId);
-      if (resultado.erro) setErro(resultado.erro);
-      else recarregar();
+
+      if (resultado.erro) {
+        setErro(resultado.erro);
+      } else {
+        recarregar();
+      }
     });
   }
 
   function handleBaterPonto() {
     startBatendo(async () => {
       const resultado = await baterPonto(funcionarioId);
-      if (resultado.erro) setErro(resultado.erro);
-      else recarregar();
+
+      if (resultado.erro) {
+        setErro(resultado.erro);
+      } else {
+        recarregar();
+      }
     });
   }
 
   if (carregando && !resumo) {
-    return <div className="mt-4 h-24 animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.02]" />;
-  }
-  if (!resumo) {
-    return <p className="mt-4 text-xs text-white/30">Não foi possível calcular o resumo de pagamento.</p>;
+    return (
+      <div className="mt-4 h-24 animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.02]" />
+    );
   }
 
-  const totalExibido = resumo.valorFinalizadoNaoPago + resumo.valorEmAndamento;
-  const horasExibidas = resumo.horasFinalizadasNaoPagas + resumo.horasEmAndamento;
+  if (!resumo) {
+    return (
+      <p className="mt-4 text-xs text-white/30">
+        Não foi possível calcular o resumo de pagamento.
+      </p>
+    );
+  }
+
+  const totalExibido =
+    resumo.valorFinalizadoNaoPago + resumo.valorEmAndamento;
+
+  const horasExibidas =
+    resumo.horasFinalizadasNaoPagas + resumo.horasEmAndamento;
 
   return (
     <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
@@ -261,6 +363,7 @@ function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
           <Wallet className="h-3.5 w-3.5" />
           Saldo pendente
         </div>
+
         <button
           type="button"
           onClick={handleBaterPonto}
@@ -271,40 +374,71 @@ function ResumoPagamentoCard({ funcionarioId }: { funcionarioId: string }) {
               : "bg-[#3EC6B9]/15 text-[#3EC6B9] hover:bg-[#3EC6B9]/25"
           }`}
         >
-          {resumo.pontoEmAberto ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-          {resumo.pontoEmAberto ? "Bater saída" : "Bater entrada"}
+          {resumo.pontoEmAberto ? (
+            <Square className="h-3 w-3" />
+          ) : (
+            <Play className="h-3 w-3" />
+          )}
+
+          {resumo.pontoEmAberto
+            ? "Bater saída"
+            : "Bater entrada"}
         </button>
       </div>
 
       <div className="mt-2 flex items-end justify-between">
         <div>
           <p className="text-2xl font-semibold">
-            {totalExibido.toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
+            {totalExibido.toLocaleString("pt-PT", {
+              style: "currency",
+              currency: "EUR",
+            })}
           </p>
+
           <p className="flex items-center gap-1 text-xs text-white/40">
-            {resumo.pontoEmAberto && <Clock className="h-3 w-3 animate-pulse text-[#3EC6B9]" />}
-            {horasExibidas}h × {resumo.valorHora.toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}/h
-            {resumo.pontoEmAberto && ` · ${resumo.horasEmAndamento}h em andamento`}
+            {resumo.pontoEmAberto && (
+              <Clock className="h-3 w-3 animate-pulse text-[#3EC6B9]" />
+            )}
+
+            {horasExibidas}h ×{" "}
+            {resumo.valorHora.toLocaleString("pt-PT", {
+              style: "currency",
+              currency: "EUR",
+            })}
+            /h
+            {resumo.pontoEmAberto &&
+              ` · ${resumo.horasEmAndamento}h em andamento`}
           </p>
         </div>
 
         <button
           type="button"
           onClick={handleMarcarPago}
-          disabled={marcando || resumo.valorFinalizadoNaoPago === 0}
+          disabled={
+            marcando || resumo.valorFinalizadoNaoPago === 0
+          }
           className="flex items-center gap-1.5 rounded-lg bg-gradient-to-b from-[#3EC6B9] to-[#2ea89c] px-3 py-2 text-xs font-semibold text-[#04201d] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Check className="h-3.5 w-3.5" />
-          {marcando ? "Registrando…" : "Pagamento Feito"}
+
+          {marcando
+            ? "Registrando…"
+            : "Pagamento Feito"}
         </button>
       </div>
+
       {resumo.pontoEmAberto && (
         <p className="mt-1.5 text-[10px] text-white/25">
-          As {resumo.horasEmAndamento}h em andamento entram na quitação só depois que o ponto for fechado.
+          As {resumo.horasEmAndamento}h em andamento entram na
+          quitação só depois que o ponto for fechado.
         </p>
       )}
 
-      {erro && <p className="mt-2 text-xs text-[#E5484D]">{erro}</p>}
+      {erro && (
+        <p className="mt-2 text-xs text-[#E5484D]">
+          {erro}
+        </p>
+      )}
     </div>
   );
 }
@@ -320,8 +454,16 @@ function GradeDisponibilidade({
     <div className="space-y-1.5">
       {DIAS_LABEL.map((label, dia) => {
         const fechado = !diasFuncionamento.includes(dia);
-        const disp = funcionario?.disponibilidade.find((d) => d.diaSemana === dia);
-        const indisponivelPorPadrao = fechado ? true : disp ? !disp.disponivel : false;
+
+        const disp = funcionario?.disponibilidade.find(
+          (d) => d.diaSemana === dia
+        );
+
+        const indisponivelPorPadrao = fechado
+          ? true
+          : disp
+            ? !disp.disponivel
+            : false;
 
         return (
           <div
@@ -330,10 +472,14 @@ function GradeDisponibilidade({
               fechado ? "opacity-40" : ""
             }`}
           >
-            <span className="w-9 shrink-0 text-xs font-medium text-white/60">{label}</span>
+            <span className="w-9 shrink-0 text-xs font-medium text-white/60">
+              {label}
+            </span>
 
             {fechado ? (
-              <span className="text-[11px] text-white/30">Restaurante fechado nesse dia</span>
+              <span className="text-[11px] text-white/30">
+                Restaurante fechado nesse dia
+              </span>
             ) : (
               <>
                 <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-white/40">
@@ -343,24 +489,32 @@ function GradeDisponibilidade({
                     defaultChecked={indisponivelPorPadrao}
                     className="accent-[#E5484D]"
                   />
+
                   Indisponível
                 </label>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {PERIODOS.map((periodo) => (
-                    <label
-                      key={periodo}
-                      className="flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/50"
-                    >
-                      <input
-                        type="checkbox"
-                        name={`disp-${dia}-${periodo}`}
-                        defaultChecked={disp?.periodosPreferidos.includes(periodo as Periodo)}
-                        className="accent-[#3EC6B9]"
-                      />
-                      {periodo}
-                    </label>
-                  ))}
+                  {PERIODOS_DISPONIBILIDADE.map(
+                    (periodo: PeriodoDisponibilidade) => (
+                      <label
+                        key={periodo}
+                        className="flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/50"
+                      >
+                        <input
+                          type="checkbox"
+                          name={`disp-${dia}-${periodo}`}
+                          defaultChecked={disp?.periodosPreferidos.includes(
+                            periodo
+                          )}
+                          className="accent-[#3EC6B9]"
+                        />
+
+                        {periodo === "Total"
+                          ? "Disponibilidade total"
+                          : periodo}
+                      </label>
+                    )
+                  )}
                 </div>
               </>
             )}
@@ -394,7 +548,10 @@ function Campo({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium text-white/50">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-white/50">
+        {label}
+      </label>
+
       <input
         name={name}
         type={type}
@@ -404,7 +561,9 @@ function Campo({
         placeholder={placeholder}
         required={required}
         onKeyDown={(e) => {
-          if (min === "0" && e.key === "-") e.preventDefault();
+          if (min === "0" && e.key === "-") {
+            e.preventDefault();
+          }
         }}
         className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50"
       />

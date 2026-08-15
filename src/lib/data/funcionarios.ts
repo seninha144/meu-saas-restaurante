@@ -1,16 +1,38 @@
 import { createClient } from "@/lib/supabase/server";
 import { horasEfetivasDoTurno } from "@/lib/horas";
-import type { DisponibilidadeDia, Funcionario, FrequenciaPagamento, Periodo } from "@/types/dominio";
+import type {
+  DisponibilidadeDia,
+  Funcionario,
+  FrequenciaPagamento,
+  PeriodoDisponibilidade,
+} from "@/types/dominio";
 
-function duracaoHoras(horaInicio: string | null, horaFim: string | null, pausaAlmocoMinutos: number): number {
-  if (!horaInicio || !horaFim) return 8; // fallback pra turnos legados sem horário gravado
-  return horasEfetivasDoTurno(horaInicio, horaFim, pausaAlmocoMinutos);
+function duracaoHoras(
+  horaInicio: string | null,
+  horaFim: string | null,
+  pausaAlmocoMinutos: number
+): number {
+  if (!horaInicio || !horaFim) {
+    return 8;
+  }
+
+  return horasEfetivasDoTurno(
+    horaInicio,
+    horaFim,
+    pausaAlmocoMinutos
+  );
 }
 
-export async function getFuncionarios(restauranteId: string, semanaInicioISO: string): Promise<Funcionario[]> {
+export async function getFuncionarios(
+  restauranteId: string,
+  semanaInicioISO: string
+): Promise<Funcionario[]> {
   const supabase = await createClient();
 
-  const { data: funcionariosRaw, error } = await supabase
+  const {
+    data: funcionariosRaw,
+    error,
+  } = await supabase
     .from("funcionarios")
     .select(
       "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento, pausa_almoco_minutos, eh_gerencia"
@@ -18,11 +40,19 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
     .eq("restaurante_id", restauranteId)
     .eq("ativo", true);
 
-  if (error) throw new Error(`Falha ao buscar funcionários: ${error.message}`);
+  if (error) {
+    throw new Error(
+      `Falha ao buscar funcionários: ${error.message}`
+    );
+  }
 
-  const { data: disponibilidadesRaw } = await supabase
+  const {
+    data: disponibilidadesRaw,
+  } = await supabase
     .from("disponibilidades")
-    .select("funcionario_id, dia_semana, disponivel, periodo")
+    .select(
+      "funcionario_id, dia_semana, disponivel, periodo"
+    )
     .eq("restaurante_id", restauranteId);
 
   const { data: escala } = await supabase
@@ -33,26 +63,86 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
     .maybeSingle();
 
   const { data: turnosSemana } = escala
-    ? await supabase.from("turnos").select("funcionario_id, dia_semana, hora_inicio, hora_fim").eq("escala_id", escala.id)
-    : { data: [] as { funcionario_id: string; dia_semana: number; hora_inicio: string | null; hora_fim: string | null }[] };
+    ? await supabase
+        .from("turnos")
+        .select(
+          "funcionario_id, dia_semana, hora_inicio, hora_fim"
+        )
+        .eq("escala_id", escala.id)
+    : {
+        data: [] as {
+          funcionario_id: string;
+          dia_semana: number;
+          hora_inicio: string | null;
+          hora_fim: string | null;
+        }[],
+      };
 
   return (funcionariosRaw ?? []).map((f) => {
-    const disponibilidade: DisponibilidadeDia[] = Array.from({ length: 7 }, (_, dia) => {
-      const linhas = (disponibilidadesRaw ?? []).filter((d) => d.funcionario_id === f.id && d.dia_semana === dia);
-      return {
-        diaSemana: dia,
-        disponivel: linhas.length === 0 ? true : linhas.some((l) => l.disponivel),
-        periodosPreferidos: linhas.filter((l) => l.periodo).map((l) => l.periodo as Periodo),
-      };
-    });
+    const disponibilidade: DisponibilidadeDia[] =
+      Array.from(
+        { length: 7 },
+        (_, dia) => {
+          const linhas =
+            (disponibilidadesRaw ?? []).filter(
+              (d) =>
+                d.funcionario_id === f.id &&
+                d.dia_semana === dia
+            );
 
-    const turnosDoFuncionario = (turnosSemana ?? []).filter((t) => t.funcionario_id === f.id);
-    const diasTrabalhados = new Set(turnosDoFuncionario.map((t) => t.dia_semana)).size;
-    const horasSemana = turnosDoFuncionario.reduce(
-      (soma, t) =>
-        soma + duracaoHoras(t.hora_inicio?.slice(0, 5) ?? null, t.hora_fim?.slice(0, 5) ?? null, f.pausa_almoco_minutos ?? 30),
-      0
-    );
+          const periodosPreferidos: PeriodoDisponibilidade[] =
+            linhas
+              .filter(
+                (linha) =>
+                  linha.disponivel &&
+                  linha.periodo !== null
+              )
+              .map((linha) => linha.periodo)
+              .filter(
+                (
+                  periodo
+                ): periodo is PeriodoDisponibilidade =>
+                  periodo === "Manhã" ||
+                  periodo === "Tarde" ||
+                  periodo === "Fechamento" ||
+                  periodo === "Total"
+              );
+
+          return {
+            diaSemana: dia,
+            disponivel:
+              linhas.length === 0
+                ? true
+                : linhas.some(
+                    (linha) => linha.disponivel
+                  ),
+            periodosPreferidos,
+          };
+        }
+      );
+
+    const turnosDoFuncionario =
+      (turnosSemana ?? []).filter(
+        (t) => t.funcionario_id === f.id
+      );
+
+    const diasTrabalhados = new Set(
+      turnosDoFuncionario.map(
+        (t) => t.dia_semana
+      )
+    ).size;
+
+    const horasSemana =
+      turnosDoFuncionario.reduce(
+        (soma, t) =>
+          soma +
+          duracaoHoras(
+            t.hora_inicio?.slice(0, 5) ?? null,
+            t.hora_fim?.slice(0, 5) ?? null,
+            f.pausa_almoco_minutos ?? 30
+          ),
+        0
+      );
 
     return {
       id: f.id,
@@ -63,22 +153,39 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
       iniciais: iniciaisDe(f.nome),
       idade: f.idade,
       genero: f.genero,
-      horasSemana: Math.round(horasSemana * 100) / 100,
-      cargaHorariaSemanalMax: Number(f.carga_horaria_semanal_max),
+      horasSemana:
+        Math.round(horasSemana * 100) / 100,
+      cargaHorariaSemanalMax:
+        Number(f.carga_horaria_semanal_max),
       folgasUsadas: 7 - diasTrabalhados,
-      folgasObrigatorias: f.folgas_obrigatorias_semana,
+      folgasObrigatorias:
+        f.folgas_obrigatorias_semana,
       disponibilidade,
       ativo: f.ativo,
-      valorHora: f.valor_hora === null ? null : Number(f.valor_hora),
-      frequenciaPagamento: f.frequencia_pagamento as FrequenciaPagamento | null,
-      pausaAlmocoMinutos: f.pausa_almoco_minutos ?? 30,
-      ehGerencia: f.eh_gerencia ?? false,
+      valorHora:
+        f.valor_hora === null
+          ? null
+          : Number(f.valor_hora),
+      frequenciaPagamento:
+        f.frequencia_pagamento as
+          | FrequenciaPagamento
+          | null,
+      pausaAlmocoMinutos:
+        f.pausa_almoco_minutos ?? 30,
+      ehGerencia:
+        f.eh_gerencia ?? false,
     };
   });
 }
 
 function iniciaisDe(nome: string): string {
   const partes = nome.trim().split(/\s+/);
-  const primeiras = partes.slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "");
+
+  const primeiras = partes
+    .slice(0, 2)
+    .map(
+      (p) => p[0]?.toUpperCase() ?? ""
+    );
+
   return primeiras.join("");
 }
