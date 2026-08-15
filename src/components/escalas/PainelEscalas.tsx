@@ -37,7 +37,12 @@ export function PainelEscalas({
 
   return (
     <>
-      <SeletorSemana inicio={dias[0]} fim={dias[6]} offsetAtual={offsetAtual} />
+     <SeletorSemana
+  escalaId={escalaId}
+  inicio={dias[0]}
+  fim={dias[6]}
+  offsetAtual={offsetAtual}
+/>
 
       <GradeSemanal
         escalaId={escalaId}
