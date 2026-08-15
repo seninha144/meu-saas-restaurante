@@ -45,6 +45,7 @@ export function PainelEscalas({
         usaZonas={usaZonas}
         funcionarios={funcionarios}
         turnos={turnos}
+        possuiTurnos={turnos.length > 0}
         alertas={alertas}
         dias={dias}
         diasFuncionamento={diasFuncionamento}

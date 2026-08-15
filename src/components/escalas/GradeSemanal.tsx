@@ -12,6 +12,7 @@ import {
   Rows3,
 } from "lucide-react";
 import { formatarDiaHeader } from "@/lib/dates";
+import { formatarHoras, horasEfetivasDoTurno } from "@/lib/horas";
 import type { Funcionario, HorarioFuncionamento, Periodo, Turno, Zona } from "@/types/dominio";
 import { GapAlerta } from "./GapAlerta";
 import { gerarEscalaAutomatica } from "@/app/(dashboard)/escalas/actions";
@@ -27,6 +28,7 @@ interface GradeSemanalProps {
   usaZonas: boolean;
   funcionarios: Funcionario[];
   turnos: Turno[];
+  possuiTurnos: boolean;
   alertas: Alerta[];
   dias: Date[];
   diasFuncionamento: number[];
@@ -44,6 +46,11 @@ function formatarHora(minutos: number): string {
   const h = Math.floor(minutos / 60);
   const m = Math.round(minutos % 60);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function resumoJornada(turno: Turno, pausaAlmocoMinutos: number): string {
+  const horasLiquidas = horasEfetivasDoTurno(turno.horaInicio, turno.horaFim, pausaAlmocoMinutos);
+  return `${formatarHoras(horasLiquidas)} líquidas · pausa ${pausaAlmocoMinutos}min`;
 }
 
 const JANELA_FALLBACK: Record<Periodo, [string, string]> = {
@@ -114,6 +121,7 @@ export function GradeSemanal({
   usaZonas,
   funcionarios,
   turnos,
+  possuiTurnos,
   alertas,
   dias,
   diasFuncionamento,
@@ -134,18 +142,28 @@ export function GradeSemanal({
   const temGerencia = funcionarios.some((f) => f.ehGerencia);
 
   function handleGerarEscala() {
+    if (
+      possuiTurnos &&
+      !window.confirm("Esta ação vai substituir todos os turnos desta semana pela nova geração automática. Deseja continuar?")
+    ) {
+      return;
+    }
     setResultadoGeracao(null);
     startGerando(async () => {
-      const resultado = await gerarEscalaAutomatica(escalaId, modoAltaDemanda);
+      const resultado = await gerarEscalaAutomatica(escalaId, modoAltaDemanda, possuiTurnos);
       if (resultado.erro) {
         setResultadoGeracao(resultado.erro);
       } else if (resultado.turnosGerados === 0 && (resultado.vagasSemCandidato ?? 0) > 0) {
         setResultadoGeracao(
           `${resultado.vagasSemCandidato} vaga(s) em aberto, mas nenhum funcionário elegível — verifique zona, carga horária e folgas.`
         );
+        router.refresh();
       } else {
+        const resumoMeta = resultado.funcionariosComMetaIncompleta
+          ? `${resultado.funcionariosComMetaIncompleta} colaborador(es) ainda com ${resultado.horasNaoAlocadas}h não alocadas.`
+          : "Metas semanais concluídas.";
         setResultadoGeracao(
-          resultado.turnosGerados === 0 ? "Nenhum turno vazio para preencher." : `${resultado.turnosGerados} turno(s) gerado(s).`
+          `${resultado.turnosGerados ?? 0} turno(s) gerado(s). ${resumoMeta}`
         );
         router.refresh();
       }
@@ -335,7 +353,7 @@ export function GradeSemanal({
             ) : (
               <>
                 <Sparkles className="h-4 w-4" />
-                Gerar escala automaticamente
+                {possuiTurnos ? "Gerar novamente a escala semanal" : "Gerar escala automaticamente"}
               </>
             )}
           </button>
@@ -471,7 +489,12 @@ export function GradeSemanal({
                                         className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-xs text-white/80 hover:bg-white/[0.06]"
                                       >
                                         {m.turno.foraPreferencia && <AlertCircle className="h-3 w-3 shrink-0 text-[#F2C94C]" />}
-                                        {m.funcionario.nome}
+                                        <span className="min-w-0">
+                                          <span className="block truncate">{m.funcionario.nome}</span>
+                                          <span className="block text-[10px] text-white/35">
+                                            {resumoJornada(m.turno, m.funcionario.pausaAlmocoMinutos)}
+                                          </span>
+                                        </span>
                                       </button>
                                     ))}
                                   </div>

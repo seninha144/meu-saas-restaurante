@@ -11,18 +11,42 @@ export interface FuncionarioFormState {
   sucesso?: boolean;
 }
 
+// ✅ Função auxiliar para extrair mensagem de erro Supabase
+function getErrorMessage(error: unknown): string {
+  if (!error) return "Erro desconhecido";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && "message" in error) {
+    return String((error as any).message);
+  }
+  return "Erro desconhecido";
+}
+
 function lerDisponibilidade(formData: FormData) {
-  const linhas: { diaSemana: number; disponivel: boolean; periodo: string | null }[] = [];
+  const linhas: {
+    diaSemana: number;
+    disponivel: boolean;
+    periodo: string | null;
+  }[] = [];
   for (let dia = 0; dia < 7; dia++) {
-    const indisponivel = formData.get(`indisponivel-${dia}`) === "on";
-    if (indisponivel) {
+    if (formData.get(`indisponivel-${dia}`) === "on") {
       linhas.push({ diaSemana: dia, disponivel: false, periodo: null });
       continue;
     }
+
+    const periodosDodia: string[] = [];
     for (const periodo of ["Manhã", "Tarde", "Noite", "Fechamento"]) {
       if (formData.get(`disp-${dia}-${periodo}`) === "on") {
-        linhas.push({ diaSemana: dia, disponivel: true, periodo });
+        periodosDodia.push(periodo);
       }
+    }
+
+    if (periodosDodia.length > 0) {
+      periodosDodia.forEach((periodo) => {
+        linhas.push({ diaSemana: dia, disponivel: true, periodo });
+      });
+    } else {
+      linhas.push({ diaSemana: dia, disponivel: false, periodo: null });
     }
   }
   return linhas;
@@ -32,122 +56,239 @@ export async function salvarFuncionario(
   _prevState: FuncionarioFormState,
   formData: FormData
 ): Promise<FuncionarioFormState> {
-  const gerente = await requireGerente();
+  try {
+    const gerente = await requireGerente();
+    if (!gerente.restauranteId) {
+      return { erro: "Sua conta não está vinculada a um restaurante." };
+    }
 
-  if (!gerente.restauranteId) {
-    console.error("[salvarFuncionario] gerente sem restauranteId:", gerente);
-    return { erro: "Sua conta não está vinculada a um restaurante. Contate o administrador." };
+    const supabase = await createClient();
+    const id = String(formData.get("id") ?? "");
+    const nome = String(formData.get("nome") ?? "").trim();
+    const cargo = String(formData.get("cargo") ?? "").trim();
+    const zonaId = String(formData.get("zonaId") ?? "") || null;
+    const idadeRaw = String(formData.get("idade") ?? "");
+    const genero = String(formData.get("genero") ?? "") || null;
+    const cargaHorariaSemanalMax = Number(formData.get("cargaHorariaSemanalMax") ?? 44);
+    const folgasObrigatorias = Number(formData.get("folgasObrigatorias") ?? 2);
+    const valorHoraRaw = String(formData.get("valorHora") ?? "");
+    const frequenciaPagamento =
+      String(formData.get("frequenciaPagamento") ?? "") || null;
+    const pausaAlmocoMinutos = Number(formData.get("pausaAlmocoMinutos") ?? 30);
+    const ehGerencia = formData.get("ehGerencia") === "on";
+
+    // ✅ Validações básicas
+    if (!nome || !cargo) {
+      return { erro: "Nome e cargo são obrigatórios." };
+    }
+    if (valorHoraRaw && Number(valorHoraRaw) < 0) {
+      return { erro: "O valor/hora não pode ser negativo." };
+    }
+    if (pausaAlmocoMinutos < 0) {
+      return { erro: "A pausa de almoço não pode ser negativa." };
+    }
+
+    // ✅ Se tem zonaId, valida se pertence ao restaurante
+    if (zonaId) {
+      const { data: zona, error: erroZona } = await supabase
+        .from("zonas")
+        .select("id")
+        .eq("id", zonaId)
+        .eq("restaurante_id", gerente.restauranteId)
+        .single();
+
+      if (erroZona || !zona) {
+        return {
+          erro: "Zona selecionada não existe ou não pertence ao seu restaurante.",
+        };
+      }
+    }
+
+    // ✅ Se é criação nova, valida limite de funcionários
+    if (!id) {
+      const { count } = await supabase
+        .from("funcionarios")
+        .select("id", { count: "exact", head: true })
+        .eq("restaurante_id", gerente.restauranteId)
+        .eq("ativo", true);
+
+      const { data: restaurante } = await supabase
+        .from("restaurantes")
+        .select("max_funcionarios")
+        .eq("id", gerente.restauranteId)
+        .single();
+
+      if (restaurante && (count ?? 0) >= restaurante.max_funcionarios) {
+        return {
+          erro: `Seu plano permite até ${restaurante.max_funcionarios} funcionários ativos.`,
+        };
+      }
+    }
+
+    // ✅ Se é edição, valida se funcionário pertence ao restaurante
+    if (id) {
+      const { data: funcionarioExistente } = await supabase
+        .from("funcionarios")
+        .select("id")
+        .eq("id", id)
+        .eq("restaurante_id", gerente.restauranteId)
+        .single();
+
+      if (!funcionarioExistente) {
+        return {
+          erro: "Funcionário não encontrado ou não pertence ao seu restaurante.",
+        };
+      }
+    }
+
+    const payload = {
+      restaurante_id: gerente.restauranteId,
+      nome,
+      cargo,
+      zona_id: zonaId,
+      idade: idadeRaw ? Number(idadeRaw) : null,
+      genero,
+      carga_horaria_semanal_max: cargaHorariaSemanalMax,
+      folgas_obrigatorias_semana: folgasObrigatorias,
+      valor_hora: valorHoraRaw ? Number(valorHoraRaw) : null,
+      frequencia_pagamento: frequenciaPagamento,
+      pausa_almoco_minutos: pausaAlmocoMinutos,
+      eh_gerencia: ehGerencia,
+      tipo_contrato: "full_time" as const,
+      modalidade_pagamento: "mes" as const,
+    };
+
+    const { data: funcionario, error } = id
+      ? await supabase
+          .from("funcionarios")
+          .update(payload)
+          .eq("id", id)
+          .eq("restaurante_id", gerente.restauranteId)
+          .select("id")
+          .single()
+      : await supabase
+          .from("funcionarios")
+          .insert(payload)
+          .select("id")
+          .single();
+
+    if (error || !funcionario) {
+      // ✅ Tratamento seguro de erro
+      const mensagemErro = getErrorMessage(error);
+      return { erro: `Falha ao salvar funcionário: ${mensagemErro}` };
+    }
+
+    // ✅ Limpa e recria disponibilidades
+    await supabase
+      .from("disponibilidades")
+      .delete()
+      .eq("funcionario_id", funcionario.id);
+
+    const linhas = lerDisponibilidade(formData);
+
+    if (linhas.length > 0) {
+      const { error: erroDisp } = await supabase
+        .from("disponibilidades")
+        .insert(
+          linhas.map((l) => ({
+            restaurante_id: gerente.restauranteId,
+            funcionario_id: funcionario.id,
+            dia_semana: l.diaSemana,
+            disponivel: l.disponivel,
+            periodo: l.periodo,
+          }))
+        );
+
+      if (erroDisp) {
+        // ✅ Tratamento seguro de erro
+        const mensagemErro = getErrorMessage(erroDisp);
+        return { erro: `Falha ao salvar disponibilidades: ${mensagemErro}` };
+      }
+    }
+
+    revalidatePath("/escalas");
+    revalidatePath("/funcionarios");
+    return { sucesso: true };
+  } catch (e) {
+    // ✅ Captura erros inesperados
+    const mensagem =
+      e instanceof Error ? e.message : "Erro desconhecido ao salvar funcionário";
+    return { erro: mensagem };
   }
+}
 
-  const supabase = await createClient();
+export interface DesativarFuncionarioState {
+  erro?: string;
+  sucesso?: boolean;
+}
 
-  const id = String(formData.get("id") ?? "");
-  const nome = String(formData.get("nome") ?? "").trim();
-  const cargo = String(formData.get("cargo") ?? "").trim();
-  const zonaId = String(formData.get("zonaId") ?? "") || null;
-  const idadeRaw = String(formData.get("idade") ?? "");
-  const genero = String(formData.get("genero") ?? "") || null;
-  const cargaHorariaSemanalMax = Number(formData.get("cargaHorariaSemanalMax") ?? 44);
-  const folgasObrigatorias = Number(formData.get("folgasObrigatorias") ?? 2);
-  const valorHoraRaw = String(formData.get("valorHora") ?? "");
-  const frequenciaPagamento = String(formData.get("frequenciaPagamento") ?? "") || null;
-  const pausaAlmocoMinutos = Number(formData.get("pausaAlmocoMinutos") ?? 30);
-  const ehGerencia = formData.get("ehGerencia") === "on";
+export async function desativarFuncionario(
+  funcionarioId: string
+): Promise<DesativarFuncionarioState> {
+  try {
+    const gerente = await requireGerente();
+    const supabase = await createClient();
 
-  if (!nome || !cargo) {
-    return { erro: "Nome e cargo são obrigatórios." };
-  }
-  if (valorHoraRaw && Number(valorHoraRaw) < 0) {
-    return { erro: "O valor/hora não pode ser negativo." };
-  }
-  if (pausaAlmocoMinutos < 0) {
-    return { erro: "A pausa de almoço não pode ser negativa." };
-  }
-
-  if (!id) {
-    const { count } = await supabase
+    // ✅ Valida se funcionário pertence ao restaurante
+    const { data: funcionario, error: erroVerif } = await supabase
       .from("funcionarios")
-      .select("id", { count: "exact", head: true })
+      .select("id")
+      .eq("id", funcionarioId)
       .eq("restaurante_id", gerente.restauranteId)
-      .eq("ativo", true);
-
-    const { data: restaurante } = await supabase
-      .from("restaurantes")
-      .select("max_funcionarios")
-      .eq("id", gerente.restauranteId)
       .single();
 
-    if (restaurante && (count ?? 0) >= restaurante.max_funcionarios) {
+    if (erroVerif || !funcionario) {
       return {
-        erro: `Seu plano permite até ${restaurante.max_funcionarios} funcionários ativos. Desative alguém ou faça upgrade pra cadastrar mais.`,
+        erro: "Funcionário não encontrado ou não pertence ao seu restaurante.",
       };
     }
+
+    // ✅ Desativa funcionário
+    const { error: erroUpdate } = await supabase
+      .from("funcionarios")
+      .update({ ativo: false })
+      .eq("id", funcionarioId)
+      .eq("restaurante_id", gerente.restauranteId);
+
+    if (erroUpdate) {
+      const mensagem = getErrorMessage(erroUpdate);
+      return { erro: `Falha ao desativar funcionário: ${mensagem}` };
+    }
+
+    revalidatePath("/escalas");
+    revalidatePath("/funcionarios");
+    return { sucesso: true };
+  } catch (e) {
+    const mensagem =
+      e instanceof Error ? e.message : "Erro desconhecido ao desativar funcionário";
+    return { erro: mensagem };
   }
-
-  const payload = {
-    restaurante_id: gerente.restauranteId,
-    nome,
-    cargo,
-    zona_id: zonaId,
-    idade: idadeRaw ? Number(idadeRaw) : null,
-    genero,
-    carga_horaria_semanal_max: cargaHorariaSemanalMax,
-    folgas_obrigatorias_semana: folgasObrigatorias,
-    valor_hora: valorHoraRaw ? Number(valorHoraRaw) : null,
-    frequencia_pagamento: frequenciaPagamento,
-    pausa_almoco_minutos: pausaAlmocoMinutos,
-    eh_gerencia: ehGerencia,
-    tipo_contrato: "full_time" as const,
-    modalidade_pagamento: "mes" as const,
-  };
-
-  const { data: funcionario, error } = id
-    ? await supabase.from("funcionarios").update(payload).eq("id", id).select("id").single()
-    : await supabase.from("funcionarios").insert(payload).select("id").single();
-
-  if (error || !funcionario) {
-    return { erro: `Falha ao salvar funcionário: ${error?.message}` };
-  }
-
-  await supabase.from("disponibilidades").delete().eq("funcionario_id", funcionario.id);
-  const linhas = lerDisponibilidade(formData);
-  if (linhas.length > 0) {
-    await supabase.from("disponibilidades").insert(
-      linhas.map((l) => ({
-        restaurante_id: gerente.restauranteId,
-        funcionario_id: funcionario.id,
-        dia_semana: l.diaSemana,
-        disponivel: l.disponivel,
-        periodo: l.periodo,
-      }))
-    );
-  }
-
-  revalidatePath("/escalas");
-  revalidatePath("/funcionarios");
-  return { sucesso: true };
 }
 
-export async function desativarFuncionario(funcionarioId: string): Promise<void> {
-  const gerente = await requireGerente();
-  const supabase = await createClient();
-
-  await supabase
-    .from("funcionarios")
-    .update({ ativo: false })
-    .eq("id", funcionarioId)
-    .eq("restaurante_id", gerente.restauranteId);
-
-  revalidatePath("/escalas");
-  revalidatePath("/funcionarios");
-}
-
-export async function getResumoPagamentoAction(funcionarioId: string): Promise<ResumoPagamento | { erro: string }> {
-  const gerente = await requireGerente();
+export async function getResumoPagamentoAction(
+  funcionarioId: string
+): Promise<ResumoPagamento | { erro: string }> {
   try {
+    const gerente = await requireGerente();
+
+    // ✅ Validação: funcionário pertence ao restaurante
+    const supabase = await createClient();
+    const { data: funcionario, error: erroVerif } = await supabase
+      .from("funcionarios")
+      .select("id")
+      .eq("id", funcionarioId)
+      .eq("restaurante_id", gerente.restauranteId)
+      .single();
+
+    if (erroVerif || !funcionario) {
+      return { erro: "Funcionário não encontrado." };
+    }
+
     return await getResumoPagamento(funcionarioId, gerente.restauranteId);
   } catch (e) {
-    return { erro: e instanceof Error ? e.message : "Falha ao calcular o resumo de pagamento." };
+    const mensagem =
+      e instanceof Error ? e.message : "Falha ao calcular o resumo de pagamento.";
+    return { erro: mensagem };
   }
 }
 
@@ -157,55 +298,97 @@ export interface PontoState {
 }
 
 /**
- * Alterna o ponto: fecha se há um em aberto, senão abre um novo.
- * Trava dura: nunca permite bater ponto num dia em que o restaurante
- * está configurado como fechado (nem entrada nem saída).
+ * Ponto batido pelo gerente na UI é sempre origem='manual' — o 'automatico' só vem do cron.
  */
-export async function baterPonto(funcionarioId: string): Promise<PontoState> {
-  const gerente = await requireGerente();
-  const supabase = await createClient();
+export async function baterPonto(
+  funcionarioId: string
+): Promise<PontoState> {
+  try {
+    const gerente = await requireGerente();
+    const supabase = await createClient();
 
-  const { data: restaurante } = await supabase
-    .from("restaurantes")
-    .select("dias_funcionamento")
-    .eq("id", gerente.restauranteId)
-    .single();
+    // ✅ Valida se funcionário existe E pertence ao restaurante
+    const { data: funcionario, error: erroFunc } = await supabase
+      .from("funcionarios")
+      .select("id, restaurante_id")
+      .eq("id", funcionarioId)
+      .eq("restaurante_id", gerente.restauranteId)
+      .single();
 
-  const diasFuncionamento: number[] = restaurante?.dias_funcionamento ?? [0, 1, 2, 3, 4, 5, 6];
-  const hoje = new Date();
-  const diaSemanaHoje = (hoje.getUTCDay() + 6) % 7; // 0 = Segunda ... 6 = Domingo
+    if (erroFunc || !funcionario) {
+      return {
+        erro: "Funcionário não encontrado ou não pertence ao seu restaurante.",
+      };
+    }
 
-  if (!diasFuncionamento.includes(diaSemanaHoje)) {
-    return { erro: "O restaurante está fechado hoje — não é possível bater ponto." };
-  }
+    // ✅ Verifica se restaurante está aberto hoje
+    const { data: restaurante } = await supabase
+      .from("restaurantes")
+      .select("dias_funcionamento")
+      .eq("id", gerente.restauranteId)
+      .single();
 
-  const { data: aberto } = await supabase
-    .from("registros_ponto")
-    .select("id")
-    .eq("funcionario_id", funcionarioId)
-    .is("saida", null)
-    .maybeSingle();
+    const diasFuncionamento: number[] =
+      restaurante?.dias_funcionamento ?? [0, 1, 2, 3, 4, 5, 6];
+    const diaSemanaHoje = (new Date().getUTCDay() + 6) % 7;
 
-  if (aberto) {
-    const { error } = await supabase
+    // ✅ Procura ponto aberto
+    const { data: aberto } = await supabase
       .from("registros_ponto")
-      .update({ saida: new Date().toISOString() })
-      .eq("id", aberto.id);
-    if (error) return { erro: `Falha ao registrar saída: ${error.message}` };
+      .select("id")
+      .eq("funcionario_id", funcionarioId)
+      .eq("restaurante_id", gerente.restauranteId)  // ✅ Segurança
+      .is("saida", null)
+      .maybeSingle();
+
+    if (aberto) {
+      // ✅ Registra saída
+      const { error: erroSaida } = await supabase
+        .from("registros_ponto")
+        .update({ saida: new Date().toISOString() })
+        .eq("id", aberto.id)
+        .eq("restaurante_id", gerente.restauranteId);  // ✅ Dupla validação
+
+      if (erroSaida) {
+        const mensagem = getErrorMessage(erroSaida);
+        return { erro: `Falha ao registrar saída: ${mensagem}` };
+      }
+
+      revalidatePath("/escalas");
+      revalidatePath("/pagamentos");
+      return { emAberto: false };
+    }
+
+    // ✅ Valida se restaurante estava aberto HOJE antes de registrar entrada
+    if (!diasFuncionamento.includes(diaSemanaHoje)) {
+      return {
+        erro: "O restaurante está fechado hoje — não é possível bater ponto.",
+      };
+    }
+
+    // ✅ Registra entrada
+    const { error: erroEntrada } = await supabase
+      .from("registros_ponto")
+      .insert({
+        restaurante_id: gerente.restauranteId,
+        funcionario_id: funcionarioId,
+        entrada: new Date().toISOString(),
+        origem: "manual",
+      });
+
+    if (erroEntrada) {
+      const mensagem = getErrorMessage(erroEntrada);
+      return { erro: `Falha ao registrar entrada: ${mensagem}` };
+    }
+
     revalidatePath("/escalas");
     revalidatePath("/pagamentos");
-    return { emAberto: false };
+    return { emAberto: true };
+  } catch (e) {
+    const mensagem =
+      e instanceof Error ? e.message : "Erro desconhecido ao bater ponto";
+    return { erro: mensagem };
   }
-
-  const { error } = await supabase.from("registros_ponto").insert({
-    restaurante_id: gerente.restauranteId,
-    funcionario_id: funcionarioId,
-    entrada: new Date().toISOString(),
-  });
-  if (error) return { erro: `Falha ao registrar entrada: ${error.message}` };
-  revalidatePath("/escalas");
-  revalidatePath("/pagamentos");
-  return { emAberto: true };
 }
 
 export interface MarcarPagoState {
@@ -213,45 +396,79 @@ export interface MarcarPagoState {
   sucesso?: boolean;
 }
 
-/**
- * "Pagamento Feito" — marca pago=true em todos os pontos FECHADOS e
- * ainda não pagos desse funcionário. O ponto em andamento (se houver)
- * nunca é tocado aqui, porque a query filtra saida is not null; ele
- * só entra na quitação depois de fechado, na próxima vez.
- */
-export async function marcarComoPago(funcionarioId: string): Promise<MarcarPagoState> {
-  const gerente = await requireGerente();
-  const supabase = await createClient();
+export async function marcarComoPago(
+  funcionarioId: string
+): Promise<MarcarPagoState> {
+  try {
+    const gerente = await requireGerente();
+    const supabase = await createClient();
 
-  const resumo = await getResumoPagamento(funcionarioId, gerente.restauranteId);
+    // ✅ Valida se funcionário pertence ao restaurante
+    const { data: funcionario, error: erroVerif } = await supabase
+      .from("funcionarios")
+      .select("id")
+      .eq("id", funcionarioId)
+      .eq("restaurante_id", gerente.restauranteId)
+      .single();
 
-  if (resumo.horasFinalizadasNaoPagas === 0) {
-    return { erro: "Não há horas finalizadas pendentes de pagamento." };
+    if (erroVerif || !funcionario) {
+      return {
+        erro: "Funcionário não encontrado ou não pertence ao seu restaurante.",
+      };
+    }
+
+    // ✅ Calcula resumo de pagamento
+    const resumo = await getResumoPagamento(
+      funcionarioId,
+      gerente.restauranteId
+    );
+
+    if (resumo.horasFinalizadasNaoPagas === 0) {
+      return {
+        erro: "Não há horas finalizadas pendentes de pagamento.",
+      };
+    }
+
+    // ✅ Marca pontos como pagos COM validação de restaurante
+    const { error: erroUpdate } = await supabase
+      .from("registros_ponto")
+      .update({ pago: true })
+      .eq("funcionario_id", funcionarioId)
+      .eq("restaurante_id", gerente.restauranteId)  // ✅ CRÍTICO: Segurança
+      .eq("pago", false)
+      .not("saida", "is", null);
+
+    if (erroUpdate) {
+      const mensagem = getErrorMessage(erroUpdate);
+      return { erro: `Falha ao registrar pagamento: ${mensagem}` };
+    }
+
+    // ✅ Registra no histórico de pagamentos
+    const { error: erroHistorico } = await supabase
+      .from("pagamentos_historico")
+      .insert({
+        restaurante_id: gerente.restauranteId,
+        funcionario_id: funcionarioId,
+        periodo_inicio: resumo.desdeMaisAntigo ?? new Date().toISOString(),
+        periodo_fim: new Date().toISOString(),
+        horas_trabalhadas: resumo.horasFinalizadasNaoPagas,
+        valor_pago: resumo.valorFinalizadoNaoPago,
+        pago_por: gerente.id,
+      });
+
+    if (erroHistorico) {
+      const mensagem = getErrorMessage(erroHistorico);
+      return { erro: `Falha ao registrar histórico de pagamento: ${mensagem}` };
+    }
+
+    revalidatePath("/escalas");
+    revalidatePath("/pagamentos");
+    revalidatePath("/funcionarios");
+
+    return { sucesso: true };
+  } catch (e) {
+    const mensagem =
+      e instanceof Error ? e.message : "Erro desconhecido ao marcar como pago";
+    return { erro: mensagem };
   }
-
-  const { error: erroUpdate } = await supabase
-    .from("registros_ponto")
-    .update({ pago: true })
-    .eq("funcionario_id", funcionarioId)
-    .eq("pago", false)
-    .not("saida", "is", null);
-
-  if (erroUpdate) {
-    console.error("[marcarComoPago] falha ao quitar pontos:", erroUpdate);
-    return { erro: `Falha ao registrar pagamento: ${erroUpdate.message}` };
-  }
-
-  await supabase.from("pagamentos_historico").insert({
-    restaurante_id: gerente.restauranteId,
-    funcionario_id: funcionarioId,
-    periodo_inicio: resumo.desdeMaisAntigo ?? new Date().toISOString(),
-    periodo_fim: new Date().toISOString(),
-    horas_trabalhadas: resumo.horasFinalizadasNaoPagas,
-    valor_pago: resumo.valorFinalizadoNaoPago,
-    pago_por: gerente.id,
-  });
-
-  revalidatePath("/escalas");
-  revalidatePath("/pagamentos");
-  return { sucesso: true };
 }

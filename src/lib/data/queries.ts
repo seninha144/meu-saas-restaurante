@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import type { Zona } from "@/types/dominio";
+import type { Restaurante, Zona } from "@/types/dominio";
 
 export async function getZonas(restauranteId: string): Promise<Zona[]> {
   const supabase = await createClient();
@@ -22,12 +22,12 @@ export async function getZonas(restauranteId: string): Promise<Zona[]> {
   }));
 }
 
-export async function getRestaurante(restauranteId: string) {
+export async function getRestaurante(restauranteId: string): Promise<Restaurante> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("restaurantes")
     .select(
-      "id, nome, pais, moeda, usa_zonas, plano, max_funcionarios, permite_ia, status_assinatura, trial_ends_at, valor_hora_padrao, frequencia_pagamento_padrao, onboarding_concluido, dias_funcionamento, cobertura_fds_prioritaria"
+      "id, nome, pais, moeda, usa_zonas, plano, max_funcionarios, permite_ia, status_assinatura, trial_ends_at, valor_hora_padrao, frequencia_pagamento_padrao, onboarding_concluido, dias_funcionamento, cobertura_fds_prioritaria, ponto_automatico"
     )
     .eq("id", restauranteId)
     .single();
@@ -50,5 +50,6 @@ export async function getRestaurante(restauranteId: string) {
     onboardingConcluido: data.onboarding_concluido as boolean,
     diasFuncionamento: (data.dias_funcionamento as number[]) ?? [0, 1, 2, 3, 4, 5, 6],
     coberturaFdsPrioritaria: data.cobertura_fds_prioritaria as boolean,
+    pontoAutomatico: data.ponto_automatico ?? false,
   };
 }

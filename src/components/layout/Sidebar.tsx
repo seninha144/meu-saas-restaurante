@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Users, Wallet, Menu, X } from "lucide-react";
+import { CalendarDays, Users, Wallet, Settings, Menu, X } from "lucide-react";
 
 const ITENS = [
   { href: "/escalas", label: "Escalas", icon: CalendarDays },
   { href: "/funcionarios", label: "Funcionários", icon: Users },
   { href: "/pagamentos", label: "Pagamentos", icon: Wallet },
+  { href: "/configuracoes", label: "Configurações", icon: Settings },
 ];
 
 export function Sidebar() {
@@ -17,7 +18,6 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Botão hamburger — só aparece em telas estreitas */}
       <button
         onClick={() => setAberto(true)}
         className="fixed left-4 top-3 z-40 flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#111318] text-white/70 lg:hidden"
@@ -25,10 +25,7 @@ export function Sidebar() {
         <Menu className="h-4 w-4" />
       </button>
 
-      {/* Overlay no mobile quando aberto */}
-      {aberto && (
-        <div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setAberto(false)} />
-      )}
+      {aberto && <div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setAberto(false)} />}
 
       <aside
         className={`fixed inset-y-0 left-0 z-50 w-56 shrink-0 border-r border-white/[0.06] bg-[#0b0d10] transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
@@ -36,9 +33,7 @@ export function Sidebar() {
         }`}
       >
         <div className="flex items-center justify-between px-4 py-4">
-          <p className="font-[Space_Grotesk,system-ui,sans-serif] text-sm font-semibold tracking-tight text-white/90">
-            Painel
-          </p>
+          <p className="font-[Space_Grotesk,system-ui,sans-serif] text-sm font-semibold tracking-tight text-white/90">Painel</p>
           <button onClick={() => setAberto(false)} className="text-white/40 hover:text-white/80 lg:hidden">
             <X className="h-4 w-4" />
           </button>

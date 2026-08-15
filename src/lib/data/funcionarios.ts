@@ -1,11 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
+import { horasEfetivasDoTurno } from "@/lib/horas";
 import type { DisponibilidadeDia, Funcionario, FrequenciaPagamento, Periodo } from "@/types/dominio";
 
-function duracaoHoras(horaInicio: string | null, horaFim: string | null): number {
+function duracaoHoras(horaInicio: string | null, horaFim: string | null, pausaAlmocoMinutos: number): number {
   if (!horaInicio || !horaFim) return 8; // fallback pra turnos legados sem horário gravado
-  const [hi, mi] = horaInicio.split(":").map(Number);
-  const [hf, mf] = horaFim.split(":").map(Number);
-  return Math.max(hf + mf / 60 - (hi + mi / 60), 0);
+  return horasEfetivasDoTurno(horaInicio, horaFim, pausaAlmocoMinutos);
 }
 
 export async function getFuncionarios(restauranteId: string, semanaInicioISO: string): Promise<Funcionario[]> {
@@ -50,7 +49,8 @@ export async function getFuncionarios(restauranteId: string, semanaInicioISO: st
     const turnosDoFuncionario = (turnosSemana ?? []).filter((t) => t.funcionario_id === f.id);
     const diasTrabalhados = new Set(turnosDoFuncionario.map((t) => t.dia_semana)).size;
     const horasSemana = turnosDoFuncionario.reduce(
-      (soma, t) => soma + duracaoHoras(t.hora_inicio?.slice(0, 5) ?? null, t.hora_fim?.slice(0, 5) ?? null),
+      (soma, t) =>
+        soma + duracaoHoras(t.hora_inicio?.slice(0, 5) ?? null, t.hora_fim?.slice(0, 5) ?? null, f.pausa_almoco_minutos ?? 30),
       0
     );
 
