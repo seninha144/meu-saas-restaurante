@@ -5,7 +5,21 @@ import type {
   Funcionario,
   FrequenciaPagamento,
   PeriodoDisponibilidade,
+  Genero,
 } from "@/types/dominio";
+
+function normalizarGenero(valor: string | null): Genero | null {
+  if (
+    valor === "masculino" ||
+    valor === "feminino" ||
+    valor === "outro" ||
+    valor === "prefiro_nao_informar"
+  ) {
+    return valor;
+  }
+
+  return null;
+}
 
 function duracaoHoras(
   horaInicio: string | null,
@@ -152,7 +166,7 @@ export async function getFuncionarios(
       zonaId: f.zona_id,
       iniciais: iniciaisDe(f.nome),
       idade: f.idade,
-      genero: f.genero,
+      genero: normalizarGenero(f.genero),
       horasSemana:
         Math.round(horasSemana * 100) / 100,
       cargaHorariaSemanalMax:
