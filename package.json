@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:horarios": "node --experimental-strip-types --test tests/horarios-meia-noite.test.ts",
     "test:ponto-automatico": "node --experimental-strip-types --test tests/ponto-automatico-horarios.test.ts"
   },
   "dependencies": {

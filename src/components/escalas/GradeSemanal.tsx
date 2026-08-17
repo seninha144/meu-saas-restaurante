@@ -15,8 +15,11 @@ import {
 
 import { formatarDiaHeader } from "@/lib/dates";
 import {
+  formatarHoraDoDia,
   formatarHoras,
   horasEfetivasDoTurno,
+  intervaloEmMinutos,
+  paraMinutos,
 } from "@/lib/horas";
 
 import type {
@@ -56,25 +59,6 @@ interface GradeSemanalProps {
   onEditarFuncionario: (
     funcionario: Funcionario
   ) => void;
-}
-
-function paraMinutos(hora: string): number {
-  const [h, m] = hora
-    .slice(0, 5)
-    .split(":")
-    .map(Number);
-
-  return h * 60 + (m || 0);
-}
-
-function formatarHora(minutos: number): string {
-  const h = Math.floor(minutos / 60);
-  const m = Math.round(minutos % 60);
-
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(
-    2,
-    "0"
-  )}`;
 }
 
 function resumoJornada(
@@ -642,10 +626,10 @@ export function GradeSemanal({
 
     const fechamentos =
       abertos.map((h) =>
-        paraMinutos(
-          h.horaFechamento ??
-            "23:00"
-        )
+        intervaloEmMinutos(
+          h.horaAbertura ?? "09:00",
+          h.horaFechamento ?? "23:00"
+        ).fim
       );
 
     const min =
@@ -737,6 +721,11 @@ export function GradeSemanal({
                   t.periodo
                 ];
 
+              const intervalo = intervaloEmMinutos(
+                t.horaInicio ?? fallbackInicio,
+                t.horaFim ?? fallbackFim
+              );
+
               return {
                 turno: t,
                 funcionario: f,
@@ -745,16 +734,8 @@ export function GradeSemanal({
                       t.zonaId
                     ) ?? null
                   : null,
-                inicioMin:
-                  paraMinutos(
-                    t.horaInicio ??
-                      fallbackInicio
-                  ),
-                fimMin:
-                  paraMinutos(
-                    t.horaFim ??
-                      fallbackFim
-                  ),
+                inicioMin: intervalo.inicio,
+                fimMin: intervalo.fim,
               };
             })
             .filter(
@@ -1451,11 +1432,11 @@ export function GradeSemanal({
                                       </p>
 
                                       <p className="truncate text-[9px] text-white/40">
-                                        {formatarHora(
+                                        {formatarHoraDoDia(
                                           g.inicioMin
                                         )}
                                         –
-                                        {formatarHora(
+                                        {formatarHoraDoDia(
                                           g.fimMin
                                         )}
                                       </p>
@@ -1471,11 +1452,11 @@ export function GradeSemanal({
                                         className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-white/10 bg-[#111318] p-1.5 shadow-xl"
                                       >
                                         <p className="px-1.5 py-1 text-[10px] font-medium uppercase tracking-wide text-white/30">
-                                          {formatarHora(
+                                          {formatarHoraDoDia(
                                             g.inicioMin
                                           )}
                                           –
-                                          {formatarHora(
+                                          {formatarHoraDoDia(
                                             g.fimMin
                                           )}{" "}
                                           ·{" "}

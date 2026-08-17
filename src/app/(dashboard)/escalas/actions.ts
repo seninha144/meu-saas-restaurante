@@ -2,7 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { requireGerente } from "@/lib/auth/permissions";
-import { horasEfetivasDoTurno } from "@/lib/horas";
+import {
+  dividirIntervalo,
+  formatarHoraDoDia,
+  horasEfetivasDoTurno,
+  intervaloEmMinutos,
+} from "@/lib/horas";
 import { getInicioSemana, toISODate } from "@/lib/dates";
 import { createClient } from "@/lib/supabase/server";
 import { PERIODOS, type Periodo } from "@/types/dominio";
@@ -72,20 +77,6 @@ interface TurnoNovo {
   status: "agendado";
 }
 
-function paraMinutos(hora: string): number {
-  const [h, m] = hora.slice(0, 5).split(":").map(Number);
-  return h * 60 + m;
-}
-
-function paraHora(minutos: number): string {
-  const normalizado = Math.round(minutos);
-
-  return `${String(Math.floor(normalizado / 60)).padStart(
-    2,
-    "0"
-  )}:${String(normalizado % 60).padStart(2, "0")}`;
-}
-
 function paraISODateUTC(data: Date): string {
   return `${data.getUTCFullYear()}-${String(
     data.getUTCMonth() + 1
@@ -99,19 +90,11 @@ function inicioDosPeriodos(
   abertura: string,
   fechamento: string
 ): Record<Periodo, number> {
-  const inicio = paraMinutos(abertura);
-  const fim = paraMinutos(fechamento);
-
-  const bloco =
-    Math.max(
-      fim - inicio,
-      PERIODOS.length * 30
-    ) / PERIODOS.length;
+  const inicios = dividirIntervalo(abertura, fechamento, PERIODOS.length);
 
   return PERIODOS.reduce(
     (resultado, periodo, indice) => {
-      resultado[periodo] =
-        inicio + bloco * indice;
+      resultado[periodo] = inicios[indice];
 
       return resultado;
     },
@@ -789,15 +772,8 @@ export async function gerarEscalaAutomatica(
       return null;
     }
 
-    const abertura =
-      paraMinutos(
-        horario.abertura
-      );
-
-    const fechamento =
-      paraMinutos(
-        horario.fechamento
-      );
+    const { inicio: abertura, fim: fechamento } =
+      intervaloEmMinutos(horario.abertura, horario.fechamento);
 
     const inicioPeriodo =
       inicioDosPeriodos(
@@ -1669,10 +1645,10 @@ export async function gerarEscalaAutomatica(
       periodo,
 
       hora_inicio:
-        paraHora(inicio),
+        formatarHoraDoDia(inicio),
 
       hora_fim:
-        paraHora(
+        formatarHoraDoDia(
           inicio +
             horas * 60 +
             funcionario.pausaAlmocoMinutos
