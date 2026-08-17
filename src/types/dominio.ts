@@ -100,6 +100,59 @@ export interface DisponibilidadeDia {
   periodosPreferidos: PeriodoDisponibilidade[];
 }
 
+/**
+ * Período operacional: conceito de "momento do dia" usado para configurar
+ * movimento e necessidade de equipa no onboarding.
+ *
+ * NÃO é um horário fixo (cada restaurante abre/fecha a horas diferentes)
+ * e NÃO deve ser confundido com `Periodo` (turno atribuído) nem com
+ * `PeriodoDisponibilidade` (preferência do funcionário).
+ */
+export type PeriodoOperacional =
+  | "Abertura"
+  | "Almoço"
+  | "Tarde"
+  | "Fechamento";
+
+export const PERIODOS_OPERACIONAIS: PeriodoOperacional[] = [
+  "Abertura",
+  "Almoço",
+  "Tarde",
+  "Fechamento",
+];
+
+export type NivelMovimento = "baixo" | "normal" | "alto" | "muito_alto";
+
+export const NIVEIS_MOVIMENTO: NivelMovimento[] = [
+  "baixo",
+  "normal",
+  "alto",
+  "muito_alto",
+];
+
+export const LABEL_NIVEL_MOVIMENTO: Record<NivelMovimento, string> = {
+  baixo: "Baixo",
+  normal: "Normal",
+  alto: "Alto",
+  muito_alto: "Muito alto",
+};
+
+export interface MovimentoOperacional {
+  diaSemana: number;
+  periodo: PeriodoOperacional;
+  nivel: NivelMovimento;
+}
+
+export interface NecessidadeEquipe {
+  diaSemana: number;
+  periodo: PeriodoOperacional;
+  zonaId: string | null;
+  funcao: string | null;
+  minimo: number;
+  ideal: number;
+  maximo: number;
+}
+
 export interface Funcionario {
   id: string;
   restauranteId: string;

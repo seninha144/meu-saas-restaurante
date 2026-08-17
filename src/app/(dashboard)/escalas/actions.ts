@@ -7,393 +7,108 @@ import { getInicioSemana, toISODate } from "@/lib/dates";
 import { createClient } from "@/lib/supabase/server";
 import { PERIODOS, type Periodo } from "@/types/dominio";
 
-/**
- * ==========================================================
- * CONSTANTES
- * ==========================================================
- */
-
-/**
- * O índice dos dias usado pelo sistema é:
- *
- * 0 = Segunda
- * 1 = Terça
- * 2 = Quarta
- * 3 = Quinta
- * 4 = Sexta
- * 5 = Sábado
- * 6 = Domingo
- */
-const SEGUNDA = 0;
 const SEXTA = 4;
 const SABADO = 5;
 const DOMINGO = 6;
-
-/**
- * Descanso mínimo entre dois turnos.
- *
- * Exemplo:
- *
- * Sábado 14:00 -> 23:00
- * Domingo 09:00 -> 18:00
- *
- * Descanso = 10h
- *
- * Não permitimos.
- */
-const DESCANSO_MINIMO_MINUTOS = 11 * 60;
-
-/**
- * Abaixo disso continuamos considerando o turno
- * tecnicamente possível, mas penalizamos fortemente.
- *
- * Exemplo:
- *
- * 23:00 -> 10:00 = 11h
- * 23:00 -> 12:00 = 13h
- *
- * O segundo cenário é humanamente melhor.
- */
-const DESCANSO_IDEAL_MINUTOS = 13 * 60;
-
-/**
- * Alta demanda continua sendo uma opção manual
- * enquanto ainda não temos o modelo de demanda
- * configurável pelo restaurante.
- */
 const MULTIPLICADOR_COBERTURA_EVENTO = 1.5;
-
-/**
- * Tipos de disponibilidade existentes na tabela
- * disponibilidades.
- *
- * IMPORTANTE:
- *
- * "Total" NÃO pertence aos turnos.
- */
-type PeriodoDisponibilidade =
-  | "Manhã"
-  | "Tarde"
-  | "Fechamento"
-  | "Total";
-
-/**
- * ==========================================================
- * ESTADO DA GERAÇÃO
- * ==========================================================
- */
 
 export interface GerarEscalaState {
   erro?: string;
-
   turnosGerados?: number;
-
   turnosSubstituidos?: number;
-
   vagasSemCandidato?: number;
-
   diasProtegidos?: number;
-
   horasNaoAlocadas?: number;
-
   funcionariosComMetaIncompleta?: number;
-
-  /**
-   * Mantemos os dois nomes porque versões diferentes
-   * da interface já utilizaram propriedades diferentes.
-   */
   confirmarSemanaSeguinte?: boolean;
-
-  requerSemanaSeguinte?: boolean;
-
   semanaInicioGerada?: string;
 }
 
-/**
- * ==========================================================
- * TIPOS INTERNOS
- * ==========================================================
- */
-
 interface PerfilFuncionario {
   id: string;
-
+  cargo: string;
   zonaId: string | null;
-
   cargaHorariaSemanalMax: number;
-
   pausaAlmocoMinutos: number;
-
   diasTrabalhoAlvo: number;
+}
+
+type PeriodoOperacional =
+  | "Abertura"
+  | "Almoço"
+  | "Tarde"
+  | "Fechamento";
+
+type NivelMovimento =
+  | "baixo"
+  | "normal"
+  | "alto"
+  | "muito_alto";
+
+interface SlotNecessidade {
+  minimo: number;
+  ideal: number;
+  maximo: number;
+  funcao?: string;
+  explicita: boolean;
 }
 
 interface HorarioDia {
   fechado: boolean;
-
   abertura: string;
-
   fechamento: string;
 }
 
 interface TurnoNovo {
   restaurante_id: string;
-
   escala_id: string;
-
   funcionario_id: string;
-
   zona_id: string | null;
-
   dia_semana: number;
-
   periodo: Periodo;
-
   hora_inicio: string;
-
   hora_fim: string;
-
   fora_preferencia: boolean;
-
   status: "agendado";
 }
 
-interface TurnoMemoria {
-  funcionario_id: string;
-
-  dia_semana: number;
-
-  periodo: Periodo;
-
-  hora_inicio: string;
-
-  hora_fim: string;
-
-  zona_id: string | null;
-}
-
-interface SlotNecessidade {
-  zonaId: string | null;
-
-  dia: number;
-
-  periodo: Periodo;
-
-  capacidade: number;
-
-  preenchido: number;
-}
-
-/**
- * ==========================================================
- * FUNÇÕES UTILITÁRIAS
- * ==========================================================
- */
-
 function paraMinutos(hora: string): number {
-  const [h, m] = hora
-    .slice(0, 5)
-    .split(":")
-    .map(Number);
-
-  return h * 60 + (m || 0);
+  const [h, m] = hora.slice(0, 5).split(":").map(Number);
+  return h * 60 + m;
 }
 
 function paraHora(minutos: number): string {
-  const normalizado = Math.max(
-    0,
-    Math.round(minutos)
-  );
+  const normalizado = Math.round(minutos);
 
-  return `${String(
-    Math.floor(normalizado / 60)
-  ).padStart(2, "0")}:${String(
-    normalizado % 60
-  ).padStart(2, "0")}`;
+  return `${String(Math.floor(normalizado / 60)).padStart(
+    2,
+    "0"
+  )}:${String(normalizado % 60).padStart(2, "0")}`;
 }
 
 function paraISODateUTC(data: Date): string {
   return `${data.getUTCFullYear()}-${String(
     data.getUTCMonth() + 1
-  ).padStart(2, "0")}-${String(
-    data.getUTCDate()
-  ).padStart(2, "0")}`;
+  ).padStart(2, "0")}-${String(data.getUTCDate()).padStart(
+    2,
+    "0"
+  )}`;
 }
 
-function arredondar(horas: number): number {
-  return Math.round(horas * 100) / 100;
-}
-
-/**
- * Retorna apenas os períodos que são realmente
- * períodos de turno.
- *
- * Se futuramente "Total" entrar no tipo Periodo
- * por acidente, ele será excluído daqui.
- */
-const PERIODOS_TURNO: Periodo[] = [
-  ...PERIODOS,
-].filter(
-  (periodo) =>
-    periodo !== ("Total" as Periodo)
-);
-
-/**
- * ==========================================================
- * PERÍODOS / DISPONIBILIDADES
- * ==========================================================
- */
-
-function ehPeriodoDisponibilidade(
-  valor: string | null
-): valor is PeriodoDisponibilidade {
-  return (
-    valor === "Manhã" ||
-    valor === "Tarde" ||
-    valor === "Fechamento" ||
-    valor === "Total"
-  );
-}
-
-function ehPeriodoTurno(
-  valor: string | null
-): valor is Periodo {
-  return PERIODOS_TURNO.includes(
-    valor as Periodo
-  );
-}
-
-/**
- * Uma disponibilidade específica representa
- * uma preferência.
- *
- * Não transforma Manhã/Tarde/Fechamento numa
- * restrição absoluta.
- */
-function periodosPreferidos(
-  disponibilidades: Array<{
-    funcionario_id: string;
-    dia_semana: number;
-    disponivel: boolean;
-    periodo: string | null;
-  }>,
-  funcionarioId: string,
-  dia: number
-): Periodo[] {
-  return disponibilidades
-    .filter(
-      (item) =>
-        item.funcionario_id ===
-          funcionarioId &&
-        item.dia_semana === dia &&
-        item.disponivel &&
-        ehPeriodoDisponibilidade(
-          item.periodo
-        ) &&
-        item.periodo !== "Total" &&
-        ehPeriodoTurno(item.periodo)
-    )
-    .map(
-      (item) =>
-        item.periodo as Periodo
-    );
-}
-
-function possuiDisponibilidadeTotal(
-  disponibilidades: Array<{
-    funcionario_id: string;
-    dia_semana: number;
-    disponivel: boolean;
-    periodo: string | null;
-  }>,
-  funcionarioId: string,
-  dia: number
-): boolean {
-  return disponibilidades.some(
-    (item) =>
-      item.funcionario_id ===
-        funcionarioId &&
-      item.dia_semana === dia &&
-      item.disponivel &&
-      item.periodo === "Total"
-  );
-}
-
-function indisponivelNoDia(
-  disponibilidades: Array<{
-    funcionario_id: string;
-    dia_semana: number;
-    disponivel: boolean;
-    periodo: string | null;
-  }>,
-  funcionarioId: string,
-  dia: number
-): boolean {
-  return disponibilidades.some(
-    (item) =>
-      item.funcionario_id ===
-        funcionarioId &&
-      item.dia_semana === dia &&
-      item.disponivel === false &&
-      item.periodo === null
-  );
-}
-
-function periodoIndisponivel(
-  disponibilidades: Array<{
-    funcionario_id: string;
-    dia_semana: number;
-    disponivel: boolean;
-    periodo: string | null;
-  }>,
-  funcionarioId: string,
-  dia: number,
-  periodo: Periodo
-): boolean {
-  return disponibilidades.some(
-    (item) =>
-      item.funcionario_id ===
-        funcionarioId &&
-      item.dia_semana === dia &&
-      item.disponivel === false &&
-      item.periodo === periodo
-  );
-}
-
-/**
- * ==========================================================
- * HORÁRIO DO RESTAURANTE
- * ==========================================================
- */
-
-/**
- * Divide o horário REAL do restaurante entre os
- * períodos operacionais.
- *
- * NÃO existem horários fixos aqui.
- */
 function inicioDosPeriodos(
   abertura: string,
   fechamento: string
 ): Record<Periodo, number> {
-  const inicio =
-    paraMinutos(abertura);
-
-  const fim =
-    paraMinutos(fechamento);
-
-  const quantidade =
-    Math.max(
-      PERIODOS_TURNO.length,
-      1
-    );
+  const inicio = paraMinutos(abertura);
+  const fim = paraMinutos(fechamento);
 
   const bloco =
     Math.max(
       fim - inicio,
-      quantidade * 30
-    ) / quantidade;
+      PERIODOS.length * 30
+    ) / PERIODOS.length;
 
-  return PERIODOS_TURNO.reduce(
+  return PERIODOS.reduce(
     (resultado, periodo, indice) => {
       resultado[periodo] =
         inicio + bloco * indice;
@@ -404,545 +119,9 @@ function inicioDosPeriodos(
   );
 }
 
-/**
- * ==========================================================
- * DATA / CALENDÁRIO
- * ==========================================================
- */
-
-/**
- * O sistema trabalha com semana iniciando na segunda.
- *
- * Esta função converte o getUTCDay() nativo:
- *
- * Domingo = 0
- * Segunda = 1
- * ...
- * Sábado = 6
- *
- * para:
- *
- * Segunda = 0
- * ...
- * Domingo = 6
- */
-function diaSistemaDaData(
-  data: Date
-): number {
-  return (
-    data.getUTCDay() + 6
-  ) % 7;
+function arredondar(horas: number): number {
+  return Math.round(horas * 100) / 100;
 }
-
-/**
- * Por enquanto temos apenas contexto estrutural
- * que já existe no projeto.
- *
- * Feriados, férias escolares, eventos, época do ano
- * e previsão de movimento serão adicionados quando
- * o cadastro inicial do restaurante passar a fornecer
- * esses dados.
- */
-function contextoDoDia(
-  dia: number
-): {
-  fimDeSemana: boolean;
-  sextaOuMaisTarde: boolean;
-} {
-  return {
-    fimDeSemana:
-      dia === SABADO ||
-      dia === DOMINGO,
-
-    sextaOuMaisTarde:
-      dia >= SEXTA,
-  };
-}
-
-/**
- * ==========================================================
- * RESTAURANTE
- * ==========================================================
- */
-
-function horarioDoTurno(
-  funcionario: PerfilFuncionario,
-  dia: number,
-  periodo: Periodo,
-  horariosPorDia: Map<
-    number,
-    HorarioDia
-  >
-) {
-  const horario =
-    horariosPorDia.get(dia);
-
-  /**
-   * NÃO inventamos horário.
-   */
-  if (
-    !horario ||
-    horario.fechado
-  ) {
-    return null;
-  }
-
-  const abertura =
-    paraMinutos(
-      horario.abertura
-    );
-
-  const fechamento =
-    paraMinutos(
-      horario.fechamento
-    );
-
-  const inicios =
-    inicioDosPeriodos(
-      horario.abertura,
-      horario.fechamento
-    );
-
-  const inicioPeriodo =
-    inicios[periodo];
-
-  const horasMaximas =
-    Math.max(
-      0,
-      (
-        fechamento -
-        abertura -
-        funcionario.pausaAlmocoMinutos
-      ) / 60
-    );
-
-  if (
-    horasMaximas <= 0
-  ) {
-    return null;
-  }
-
-  return {
-    abertura,
-
-    fechamento,
-
-    inicioPeriodo,
-
-    horasMaximas,
-  };
-}
-
-/**
- * ==========================================================
- * MEMÓRIA DOS TURNOS
- * ==========================================================
- */
-
-function adicionarTurnoNaMemoria(
-  mapa: Map<
-    string,
-    TurnoMemoria[]
-  >,
-  turno: TurnoMemoria
-) {
-  const lista =
-    mapa.get(
-      turno.funcionario_id
-    ) ?? [];
-
-  lista.push(turno);
-
-  mapa.set(
-    turno.funcionario_id,
-    lista
-  );
-}
-
-/**
- * Procura o último turno do funcionário
- * no dia indicado.
- */
-function turnoDoDia(
-  memoria: Map<
-    string,
-    TurnoMemoria[]
-  >,
-  funcionarioId: string,
-  dia: number
-): TurnoMemoria | null {
-  const turnos =
-    memoria.get(
-      funcionarioId
-    ) ?? [];
-
-  const doDia =
-    turnos.filter(
-      (turno) =>
-        turno.dia_semana ===
-        dia
-    );
-
-  if (
-    doDia.length === 0
-  ) {
-    return null;
-  }
-
-  return (
-    doDia.sort(
-      (a, b) =>
-        paraMinutos(
-          b.hora_fim
-        ) -
-        paraMinutos(
-          a.hora_fim
-        )
-    )[0] ?? null
-  );
-}
-
-/**
- ==========================================================
- * DESCANSO
- * ==========================================================
- */
-
-function descansoEntreTurnos(
-  turnoAnterior: TurnoMemoria,
-  turnoAtual: {
-    dia: number;
-    horaInicio: number;
-  }
-): number {
-  const fimAnterior =
-    paraMinutos(
-      turnoAnterior.hora_fim
-    );
-
-  /**
-   * Se o turno anterior pertence ao dia imediatamente
-   * anterior, adicionamos 24h.
-   */
-  const mesmoDiaOuSeguinte =
-    turnoAnterior.dia_semana ===
-    turnoAtual.dia;
-
-  if (
-    mesmoDiaOuSeguinte
-  ) {
-    return (
-      turnoAtual.horaInicio -
-      fimAnterior
-    );
-  }
-
-  return (
-    (
-      turnoAtual.dia -
-      turnoAnterior.dia_semana
-    ) *
-      24 *
-      60 +
-    turnoAtual.horaInicio -
-    fimAnterior
-  );
-}
-
-/**
- Verifica o descanso entre o último turno e
- o novo turno.
- */
-function respeitaDescanso(
-  memoria: Map<
-    string,
-    TurnoMemoria[]
-  >,
-  funcionarioId: string,
-  dia: number,
-  horaInicio: number
-): boolean {
-  /**
-   * Primeiro verificamos o dia anterior.
-   */
-  const diaAnterior =
-    dia === SEGUNDA
-      ? DOMINGO
-      : dia - 1;
-
-  const anterior =
-    turnoDoDia(
-      memoria,
-      funcionarioId,
-      diaAnterior
-    );
-
-  if (!anterior) {
-    return true;
-  }
-
-  const descanso =
-    descansoEntreTurnos(
-      anterior,
-      {
-        dia,
-        horaInicio,
-      }
-    );
-
-  return (
-    descanso >=
-    DESCANSO_MINIMO_MINUTOS
-  );
-}
-
-/**
- ==========================================================
- * HORAS DO TURNO
- ==========================================================
- */
-
-function calcularHorasDoTurno(
-  funcionario: PerfilFuncionario,
-  dia: number,
-  periodo: Periodo,
-  horasRestantes: Map<
-    string,
-    number
-  >,
-  diasTrabalhados: Map<
-    string,
-    Set<number>
-  >,
-  horariosPorDia: Map<
-    number,
-    HorarioDia
-  >
-) {
-  const horario =
-    horarioDoTurno(
-      funcionario,
-      dia,
-      periodo,
-      horariosPorDia
-    );
-
-  if (!horario) {
-    return null;
-  }
-
-  const restantes =
-    horasRestantes.get(
-      funcionario.id
-    ) ?? 0;
-
-  if (
-    restantes <= 0.01
-  ) {
-    return null;
-  }
-
-  const trabalhados =
-    diasTrabalhados.get(
-      funcionario.id
-    )?.size ?? 0;
-
-  const diasRestantes =
-    Math.max(
-      1,
-      funcionario.diasTrabalhoAlvo -
-        trabalhados
-    );
-
-  /**
-   * Distribuímos as horas restantes pelos
-   * dias que ainda faltam.
-   *
-   * Exemplo:
-   *
-   * 40h / 5 dias = 8h
-   * 35h / 5 dias = 7h
-   * 20h / 5 dias = 4h
-   */
-  const horasDesejadas =
-    restantes /
-    diasRestantes;
-
-  const horas =
-    Math.min(
-      restantes,
-      horasDesejadas,
-      horario.horasMaximas
-    );
-
-  if (
-    horas <= 0.01
-  ) {
-    return null;
-  }
-
-  const duracaoBrutaMinutos =
-    horas * 60 +
-    funcionario.pausaAlmocoMinutos;
-
-  const ultimoInicioPossivel =
-    horario.fechamento -
-    duracaoBrutaMinutos;
-
-  const inicio =
-    Math.max(
-      horario.abertura,
-      Math.min(
-        horario.inicioPeriodo,
-        ultimoInicioPossivel
-      )
-    );
-
-  const fim =
-    inicio +
-    duracaoBrutaMinutos;
-
-  if (
-    fim >
-    horario.fechamento +
-      0.01
-  ) {
-    return null;
-  }
-
-  return {
-    horas,
-
-    inicio,
-
-    fim,
-
-    abertura:
-      horario.abertura,
-
-    fechamento:
-      horario.fechamento,
-  };
-}
-
-/**
- ==========================================================
- * CLASSIFICAÇÃO DO PERÍODO
- ==========================================================
- */
-
-function periodoEhFechamento(
-  periodo: Periodo
-): boolean {
-  return (
-    periodo ===
-      "Fechamento" ||
-    periodo === "Noite"
-  );
-}
-
-/**
- ==========================================================
- * CONTAGEM / ESTABILIDADE
- ==========================================================
- */
-
-function contarFechamentos(
-  memoria: Map<
-    string,
-    TurnoMemoria[]
-  >,
-  funcionarioId: string
-): number {
-  return (
-    memoria
-      .get(funcionarioId)
-      ?.filter(
-        (turno) =>
-          periodoEhFechamento(
-            turno.periodo
-          )
-      ).length ?? 0
-  );
-}
-
-function contarFinsDeSemana(
-  memoria: Map<
-    string,
-    TurnoMemoria[]
-  >,
-  funcionarioId: string
-): number {
-  return (
-    memoria
-      .get(funcionarioId)
-      ?.filter(
-        (turno) =>
-          turno.dia_semana ===
-            SABADO ||
-          turno.dia_semana ===
-            DOMINGO
-      ).length ?? 0
-  );
-}
-
-function contarSequenciaAnterior(
-  dias: Set<number>,
-  dia: number
-): number {
-  let contador = 0;
-
-  for (
-    let atual = dia - 1;
-    atual >= 0;
-    atual--
-  ) {
-    if (
-      !dias.has(atual)
-    ) {
-      break;
-    }
-
-    contador++;
-  }
-
-  return contador;
-}
-
-function mesmoPeriodoOuVizinho(
-  anterior: Periodo,
-  atual: Periodo
-): boolean {
-  const indiceAnterior =
-    PERIODOS_TURNO.indexOf(
-      anterior
-    );
-
-  const indiceAtual =
-    PERIODOS_TURNO.indexOf(
-      atual
-    );
-
-  if (
-    indiceAnterior < 0 ||
-    indiceAtual < 0
-  ) {
-    return false;
-  }
-
-  return (
-    Math.abs(
-      indiceAnterior -
-        indiceAtual
-    ) <= 1
-  );
-}
-
-/**
- ==========================================================
- * GERAÇÃO
- ==========================================================
- */
 
 export async function gerarEscalaAutomatica(
   escalaId: string,
@@ -950,66 +129,33 @@ export async function gerarEscalaAutomatica(
   substituirTurnosExistentes = false,
   forcarSemanaSeguinte = false
 ): Promise<GerarEscalaState> {
-  const gerente =
-    await requireGerente();
-
-  const supabase =
-    await createClient();
-
-  /**
-   * ========================================================
-   * RESTAURANTE + ESCALA
-   * ========================================================
-   */
+  const gerente = await requireGerente();
+  const supabase = await createClient();
 
   const [
-    {
-      data: restaurante,
-      error: erroRestaurante,
-    },
-    {
-      data: escalaInicial,
-      error: erroEscala,
-    },
+    { data: restaurante },
+    { data: escalaInicial },
   ] = await Promise.all([
     supabase
       .from("restaurantes")
       .select(
         "usa_zonas, permite_ia, dias_funcionamento, cobertura_fds_prioritaria"
       )
-      .eq(
-        "id",
-        gerente.restauranteId
-      )
+      .eq("id", gerente.restauranteId)
       .single(),
 
     supabase
       .from("escalas")
       .select(
-        "id, semana_inicio, semana_fim, status"
+        "id, semana_inicio, semana_fim"
       )
-      .eq(
-        "id",
-        escalaId
-      )
+      .eq("id", escalaId)
       .eq(
         "restaurante_id",
         gerente.restauranteId
       )
       .maybeSingle(),
   ]);
-
-  if (erroRestaurante) {
-    return {
-      erro: `Falha ao consultar o restaurante: ${erroRestaurante.message}`,
-    };
-  }
-
-  if (erroEscala) {
-    return {
-      erro: `Falha ao consultar a escala: ${erroEscala.message}`,
-    };
-  }
 
   if (!escalaInicial) {
     return {
@@ -1018,17 +164,6 @@ export async function gerarEscalaAutomatica(
     };
   }
 
-  /**
-   * Mantemos a lógica atual de planos.
-   *
-   * Futuramente:
-   *
-   * Trial
-   * Médio
-   * Pro
-   *
-   * poderão controlar esta permissão.
-   */
   if (
     restaurante &&
     !restaurante.permite_ia
@@ -1039,30 +174,22 @@ export async function gerarEscalaAutomatica(
     };
   }
 
-  /**
-   * ========================================================
-   * PROTEÇÃO DA SEMANA ATUAL
-   * ========================================================
+  /*
+   * ==========================================================
+   * PROTEÇÃO DE FIM DE SEMANA
+   * ==========================================================
    */
 
-  const semanaAtualInicio =
-    toISODate(
-      getInicioSemana(
-        new Date()
-      )
-    );
+  const semanaAtualInicio = toISODate(
+    getInicioSemana(new Date())
+  );
 
-  const hoje =
-    new Date();
-
-  const hojeDia =
-    diaSistemaDaData(
-      hoje
-    );
+  const hojeDiaSemana =
+    new Date().getUTCDay();
 
   const eFimDeSemana =
-    hojeDia === SABADO ||
-    hojeDia === DOMINGO;
+    hojeDiaSemana === 0 ||
+    hojeDiaSemana === 6;
 
   const eSemanaAtual =
     escalaInicial.semana_inicio ===
@@ -1076,57 +203,41 @@ export async function gerarEscalaAutomatica(
     return {
       erro:
         "Não é possível gerar a escala pois está em cima da hora, gostaria de gerar a escala da semana seguinte?",
-
-      confirmarSemanaSeguinte:
-        true,
-
-      requerSemanaSeguinte:
-        true,
+      confirmarSemanaSeguinte: true,
     };
   }
 
-  /**
-   * ========================================================
+  /*
+   * ==========================================================
    * SEMANA SEGUINTE
-   * ========================================================
+   * ==========================================================
    */
 
-  let escala =
-    escalaInicial;
+  let escala = escalaInicial;
 
-  if (
-    forcarSemanaSeguinte
-  ) {
+  if (forcarSemanaSeguinte) {
     const inicioSeguinte =
       new Date(
         `${escalaInicial.semana_inicio}T00:00:00Z`
       );
 
     inicioSeguinte.setUTCDate(
-      inicioSeguinte.getUTCDate() +
-        7
+      inicioSeguinte.getUTCDate() + 7
     );
 
     const fimSeguinte =
-      new Date(
-        inicioSeguinte
-      );
+      new Date(inicioSeguinte);
 
     fimSeguinte.setUTCDate(
-      fimSeguinte.getUTCDate() +
-        6
+      fimSeguinte.getUTCDate() + 6
     );
 
     const semanaInicioSeguinte =
-      toISODate(
-        inicioSeguinte
-      );
+      toISODate(inicioSeguinte);
 
     const {
-      data:
-        escalaSeguinteExistente,
-      error:
-        erroBuscaSeguinte,
+      data: escalaSeguinteExistente,
+      error: erroBuscaSeguinte,
     } = await supabase
       .from("escalas")
       .select(
@@ -1142,40 +253,29 @@ export async function gerarEscalaAutomatica(
       )
       .maybeSingle();
 
-    if (
-      erroBuscaSeguinte
-    ) {
+    if (erroBuscaSeguinte) {
       return {
         erro: `Falha ao consultar a semana seguinte: ${erroBuscaSeguinte.message}`,
       };
     }
 
-    if (
-      escalaSeguinteExistente
-    ) {
+    if (escalaSeguinteExistente) {
       escala =
         escalaSeguinteExistente;
     } else {
       const {
         data: novaEscala,
-        error:
-          erroCriacao,
+        error: erroCriacao,
       } = await supabase
         .from("escalas")
         .insert({
           restaurante_id:
             gerente.restauranteId,
-
           semana_inicio:
             semanaInicioSeguinte,
-
           semana_fim:
-            toISODate(
-              fimSeguinte
-            ),
-
-          status:
-            "rascunho",
+            toISODate(fimSeguinte),
+          status: "rascunho",
         })
         .select(
           "id, semana_inicio, semana_fim, status"
@@ -1187,90 +287,64 @@ export async function gerarEscalaAutomatica(
         !novaEscala
       ) {
         return {
-          erro: `Falha ao criar a escala da semana seguinte: ${erroCriacao?.message ?? "erro desconhecido"}`,
+          erro: `Falha ao criar a escala da semana seguinte: ${erroCriacao?.message}`,
         };
       }
 
-      escala =
-        novaEscala;
+      escala = novaEscala;
     }
 
-    escalaId =
-      escala.id;
-
-    /**
-     * A semana seguinte não deve apagar uma escala
-     * já existente automaticamente.
-     */
-    substituirTurnosExistentes =
-      false;
+    escalaId = escala.id;
+    substituirTurnosExistentes = false;
   }
 
-  /**
-   * ========================================================
+  /*
+   * ==========================================================
    * TURNOS EXISTENTES
-   * ========================================================
+   * ==========================================================
    */
 
   const {
-    data:
-      turnosExistentes,
-    error:
-      erroTurnosExistentes,
+    data: turnosExistentes,
+    error: erroTurnosExistentes,
   } = await supabase
     .from("turnos")
     .select(
       "id, funcionario_id, zona_id, dia_semana, periodo, hora_inicio, hora_fim"
     )
-    .eq(
-      "escala_id",
-      escala.id
-    )
+    .eq("escala_id", escala.id)
     .eq(
       "restaurante_id",
       gerente.restauranteId
     );
 
-  if (
-    erroTurnosExistentes
-  ) {
+  if (erroTurnosExistentes) {
     return {
       erro: `Falha ao consultar a escala: ${erroTurnosExistentes.message}`,
     };
   }
 
-  const quantidadeTurnosExistentes =
-    turnosExistentes?.length ??
-    0;
-
   const turnosSubstituidos =
     substituirTurnosExistentes
-      ? quantidadeTurnosExistentes
+      ? turnosExistentes?.length ?? 0
       : 0;
 
-  /**
-   * Mantemos o comportamento atual:
-   * quando "Gerar novamente" é utilizado,
-   * a escala atual é limpa antes da nova geração.
-   */
   if (
     substituirTurnosExistentes &&
-    quantidadeTurnosExistentes >
-      0
+    turnosSubstituidos > 0
   ) {
-    const {
-      error,
-    } = await supabase
-      .from("turnos")
-      .delete()
-      .eq(
-        "escala_id",
-        escala.id
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      );
+    const { error } =
+      await supabase
+        .from("turnos")
+        .delete()
+        .eq(
+          "escala_id",
+          escala.id
+        )
+        .eq(
+          "restaurante_id",
+          gerente.restauranteId
+        );
 
     if (error) {
       return {
@@ -1279,33 +353,19 @@ export async function gerarEscalaAutomatica(
     }
   }
 
-  /**
-   * ========================================================
-   * DADOS PRINCIPAIS
-   * ========================================================
+  /*
+   * ==========================================================
+   * DADOS DO RESTAURANTE
+   * ==========================================================
    */
 
   const [
-    {
-      data: zonasRaw,
-      error: erroZonas,
-    },
-    {
-      data: funcionariosRaw,
-      error:
-        erroFuncionarios,
-    },
-    {
-      data:
-        disponibilidadesRaw,
-      error:
-        erroDisponibilidades,
-    },
-    {
-      data: horariosRaw,
-      error:
-        erroHorarios,
-    },
+    { data: zonasRaw },
+    { data: funcionariosRaw },
+    { data: disponibilidadesRaw },
+    { data: horariosRaw },
+    { data: movimentosRaw },
+    { data: necessidadesRaw },
   ] = await Promise.all([
     supabase
       .from("zonas")
@@ -1316,24 +376,18 @@ export async function gerarEscalaAutomatica(
         "restaurante_id",
         gerente.restauranteId
       )
-      .eq(
-        "ativo",
-        true
-      ),
+      .eq("ativo", true),
 
     supabase
       .from("funcionarios")
       .select(
-        "id, zona_id, carga_horaria_semanal_max, folgas_obrigatorias_semana, pausa_almoco_minutos"
+        "id, cargo, zona_id, carga_horaria_semanal_max, folgas_obrigatorias_semana, pausa_almoco_minutos"
       )
       .eq(
         "restaurante_id",
         gerente.restauranteId
       )
-      .eq(
-        "ativo",
-        true
-      ),
+      .eq("ativo", true),
 
     supabase
       .from("disponibilidades")
@@ -1354,148 +408,74 @@ export async function gerarEscalaAutomatica(
         "restaurante_id",
         gerente.restauranteId
       ),
+
+    supabase
+      .from("movimento_operacional")
+      .select(
+        "dia_semana, periodo, nivel"
+      )
+      .eq(
+        "restaurante_id",
+        gerente.restauranteId
+      ),
+
+    supabase
+      .from("necessidades_equipe")
+      .select(
+        "dia_semana, periodo, zona_id, funcao, minimo, ideal, maximo"
+      )
+      .eq(
+        "restaurante_id",
+        gerente.restauranteId
+      ),
   ]);
 
-  if (erroZonas) {
-    return {
-      erro: `Falha ao consultar zonas: ${erroZonas.message}`,
-    };
-  }
-
-  if (
-    erroFuncionarios
-  ) {
-    return {
-      erro: `Falha ao consultar funcionários: ${erroFuncionarios.message}`,
-    };
-  }
-
-  if (
-    erroDisponibilidades
-  ) {
-    return {
-      erro: `Falha ao consultar disponibilidades: ${erroDisponibilidades.message}`,
-    };
-  }
-
-  if (erroHorarios) {
-    return {
-      erro: `Falha ao consultar horários do restaurante: ${erroHorarios.message}`,
-    };
-  }
-
-  /**
-   * ========================================================
-   * CONFIGURAÇÃO
-   * ========================================================
-   */
-
   const usaZonas =
-    restaurante?.usa_zonas ??
-    false;
+    restaurante?.usa_zonas ?? true;
 
   const diasFuncionamento: number[] =
     restaurante?.dias_funcionamento ??
     [0, 1, 2, 3, 4, 5, 6];
 
-  const zonas =
-    zonasRaw ?? [];
-
+  const zonas = zonasRaw ?? [];
   const disponibilidades =
     disponibilidadesRaw ?? [];
+  const movimentos =
+    movimentosRaw ?? [];
+  const necessidades =
+    necessidadesRaw ?? [];
 
   const horariosPorDia =
-    new Map<
-      number,
-      HorarioDia
-    >();
+    new Map<number, HorarioDia>();
 
   for (
     const horario of
       horariosRaw ?? []
   ) {
-    if (
-      !horario.hora_abertura ||
-      !horario.hora_fechamento
-    ) {
-      continue;
-    }
-
     horariosPorDia.set(
       horario.dia_semana,
       {
         fechado:
-          Boolean(
-            horario.fechado
-          ),
-
+          horario.fechado,
         abertura:
-          horario.hora_abertura.slice(
+          horario.hora_abertura?.slice(
             0,
             5
-          ),
-
+          ) ?? "09:00",
         fechamento:
-          horario.hora_fechamento.slice(
+          horario.hora_fechamento?.slice(
             0,
             5
-          ),
+          ) ?? "23:00",
       }
     );
   }
 
-  /**
-   * Se o restaurante diz que funciona num dia,
-   * precisamos ter o horário desse dia configurado.
-   *
-   * Não inventamos 09:00 / 23:00.
-   */
-  const diasSemHorario =
-    diasFuncionamento.filter(
-      (dia) =>
-        !horariosPorDia.has(
-          dia
-        )
-    );
-
-  if (
-    diasSemHorario.length >
-    0
-  ) {
-    return {
-      erro:
-        `Existem dias de funcionamento sem horário configurado: ${diasSemHorario
-          .map(
-            (dia) =>
-              [
-                "segunda",
-                "terça",
-                "quarta",
-                "quinta",
-                "sexta",
-                "sábado",
-                "domingo",
-              ][dia]
-          )
-          .join(", ")}.`,
-    };
-  }
-
-  /**
-   * ========================================================
-   * FUNCIONÁRIOS
-   * ========================================================
-   */
-
   const funcionarios: PerfilFuncionario[] =
-    (
-      funcionariosRaw ??
-      []
-    ).map(
+    (funcionariosRaw ?? []).map(
       (funcionario) => ({
-        id:
-          funcionario.id,
-
+        id: funcionario.id,
+        cargo: funcionario.cargo ?? "",
         zonaId:
           funcionario.zona_id,
 
@@ -1512,21 +492,20 @@ export async function gerarEscalaAutomatica(
           Math.max(
             0,
             Math.min(
-              diasFuncionamento.length,
               7 -
                 Number(
-                  funcionario.folgas_obrigatorias_semana ??
-                    0
-                )
+                  funcionario.folgas_obrigatorias_semana
+                ),
+              diasFuncionamento.length
             )
           ),
       })
     );
 
-  /**
-   * ========================================================
-   * DATAS DA SEMANA
-   * ========================================================
+  /*
+   * ==========================================================
+   * DIAS DA SEMANA
+   * ==========================================================
    */
 
   const semanaInicio =
@@ -1535,26 +514,22 @@ export async function gerarEscalaAutomatica(
     );
 
   const hojeISO =
-    paraISODateUTC(
-      new Date()
+    paraISODateUTC(new Date());
+
+  const dataDoDia = (
+    dia: number
+  ) => {
+    const data =
+      new Date(semanaInicio);
+
+    data.setUTCDate(
+      data.getUTCDate() + dia
     );
 
-  const dataDoDia =
-    (dia: number) => {
-      const data =
-        new Date(
-          semanaInicio
-        );
-
-      data.setUTCDate(
-        data.getUTCDate() +
-          dia
-      );
-
-      return paraISODateUTC(
-        data
-      );
-    };
+    return paraISODateUTC(
+      data
+    );
+  };
 
   const diasPassados =
     new Set(
@@ -1568,121 +543,105 @@ export async function gerarEscalaAutomatica(
       )
     );
 
-  /**
-   * ========================================================
-   * DIAS QUE PODEM SER GERADOS
-   * ========================================================
+  /*
+   * IMPORTANTE:
+   * O restaurante continua sendo a fonte dos horários.
+   * A geração nunca altera hora_abertura/hora_fechamento.
    */
 
   const diasParaProcessar =
-    diasFuncionamento.filter(
-      (dia) =>
-        !diasPassados.has(
-          dia
-        ) &&
-        !(
-          horariosPorDia.get(
+    diasFuncionamento
+      .filter(
+        (dia) =>
+          !diasPassados.has(
             dia
-          )?.fechado ??
-          false
-        )
-    );
+          ) &&
+          !(
+            horariosPorDia.get(
+              dia
+            )?.fechado ?? false
+          )
+      )
+      .sort((a, b) => {
+        if (
+          !restaurante?.cobertura_fds_prioritaria
+        ) {
+          return a - b;
+        }
 
-  if (
-    diasParaProcessar.length ===
-    0
-  ) {
-    return {
-      erro:
-        "Não existem dias abertos e disponíveis para gerar nesta semana.",
-    };
-  }
+        const peso = (
+          dia: number
+        ) =>
+          dia === SEXTA ||
+          dia === SABADO ||
+          dia === DOMINGO
+            ? 0
+            : 1;
 
-  /**
-   * ========================================================
-   * MEMÓRIA DA ESCALA
-   * ========================================================
+        return (
+          peso(a) -
+            peso(b) ||
+          a - b
+        );
+      });
+
+  /*
+   * ==========================================================
+   * ESTADO DA ESCALA
+   * ==========================================================
    */
 
   const turnosBase =
     substituirTurnosExistentes
       ? []
-      : turnosExistentes ??
-        [];
+      : turnosExistentes ?? [];
 
-  const memoriaTurnos =
-    new Map<
-      string,
-      TurnoMemoria[]
-    >();
-
-  const diasTrabalhados =
+  const diasOcupados =
     new Map<
       string,
       Set<number>
-    >();
+    >(
+      funcionarios.map(
+        (funcionario) => [
+          funcionario.id,
+          new Set<number>(),
+        ]
+      )
+    );
 
   const horasRestantes =
+    new Map<
+      string,
+      number
+    >(
+      funcionarios.map(
+        (funcionario) => [
+          funcionario.id,
+          funcionario.cargaHorariaSemanalMax,
+        ]
+      )
+    );
+
+  const coberturaExistente =
+    new Map<
+      string,
+      number
+    >();
+
+  /*
+   * Quantas pessoas estão atualmente
+   * trabalhando por zona/dia.
+   */
+  const trabalhadoresPorDiaZona =
     new Map<
       string,
       number
     >();
 
   for (
-    const funcionario of
-      funcionarios
+    const turno of turnosBase
   ) {
-    diasTrabalhados.set(
-      funcionario.id,
-      new Set<number>()
-    );
-
-    horasRestantes.set(
-      funcionario.id,
-      funcionario.cargaHorariaSemanalMax
-    );
-  }
-
-  /**
-   * Turnos da própria semana.
-   */
-  for (
-    const turno of
-      turnosBase
-  ) {
-    const memoria: TurnoMemoria =
-      {
-        funcionario_id:
-          turno.funcionario_id,
-
-        dia_semana:
-          turno.dia_semana,
-
-        periodo:
-          turno.periodo as Periodo,
-
-        hora_inicio:
-          turno.hora_inicio?.slice(
-            0,
-            5
-          ) ?? "00:00",
-
-        hora_fim:
-          turno.hora_fim?.slice(
-            0,
-            5
-          ) ?? "00:00",
-
-        zona_id:
-          turno.zona_id,
-      };
-
-    adicionarTurnoNaMemoria(
-      memoriaTurnos,
-      memoria
-    );
-
-    diasTrabalhados
+    diasOcupados
       .get(
         turno.funcionario_id
       )
@@ -1697,13 +656,17 @@ export async function gerarEscalaAutomatica(
           turno.funcionario_id
       );
 
-    if (
-      funcionario
-    ) {
+    if (funcionario) {
       const horas =
         horasEfetivasDoTurno(
-          memoria.hora_inicio,
-          memoria.hora_fim,
+          turno.hora_inicio?.slice(
+            0,
+            5
+          ) ?? null,
+          turno.hora_fim?.slice(
+            0,
+            5
+          ) ?? null,
           funcionario.pausaAlmocoMinutos
         );
 
@@ -1711,1387 +674,1783 @@ export async function gerarEscalaAutomatica(
         funcionario.id,
         Math.max(
           0,
-          (
-            horasRestantes.get(
-              funcionario.id
-            ) ?? 0
-          ) - horas
+          (horasRestantes.get(
+            funcionario.id
+          ) ?? 0) -
+            horas
         )
       );
     }
+
+    const chaveCobertura =
+      `${
+        turno.zona_id ??
+        "sem-zona"
+      }:${turno.dia_semana}:${turno.periodo}`;
+
+    coberturaExistente.set(
+      chaveCobertura,
+      (coberturaExistente.get(
+        chaveCobertura
+      ) ?? 0) + 1
+    );
+
+    const chaveDiaZona =
+      `${
+        turno.zona_id ??
+        "sem-zona"
+      }:${turno.dia_semana}`;
+
+    trabalhadoresPorDiaZona.set(
+      chaveDiaZona,
+      (trabalhadoresPorDiaZona.get(
+        chaveDiaZona
+      ) ?? 0) + 1
+    );
   }
 
-  /**
-   * ========================================================
-   * SEMANA ANTERIOR
-   * ========================================================
-   *
-   * Isto é importante para evitar:
-   *
-   * Domingo 23:00
-   * +
-   * Segunda 09:00
-   *
-   * mesmo que o turno de domingo pertença
-   * à escala anterior.
+  /*
+   * ==========================================================
+   * DISPONIBILIDADES
+   * ==========================================================
    */
 
-  const inicioSemanaAnterior =
-    new Date(
-      semanaInicio
+  const indisponivelNoDia = (
+    funcionarioId: string,
+    dia: number
+  ) =>
+    disponibilidades.some(
+      (item) =>
+        item.funcionario_id ===
+          funcionarioId &&
+        item.dia_semana ===
+          dia &&
+        item.disponivel ===
+          false &&
+        item.periodo === null
     );
 
-  inicioSemanaAnterior.setUTCDate(
-    inicioSemanaAnterior.getUTCDate() -
-      7
-  );
-
-  const semanaAnteriorISO =
-    toISODate(
-      inicioSemanaAnterior
+  const periodoIndisponivel = (
+    funcionarioId: string,
+    dia: number,
+    periodo: Periodo
+  ) =>
+    disponibilidades.some(
+      (item) =>
+        item.funcionario_id ===
+          funcionarioId &&
+        item.dia_semana ===
+          dia &&
+        item.disponivel ===
+          false &&
+        item.periodo ===
+          periodo
     );
 
-  const {
-    data:
-      escalaAnterior,
-  } = await supabase
-    .from("escalas")
-    .select("id")
-    .eq(
-      "restaurante_id",
-      gerente.restauranteId
-    )
-    .eq(
-      "semana_inicio",
-      semanaAnteriorISO
-    )
-    .maybeSingle();
-
-  if (
-    escalaAnterior
-  ) {
-    const {
-      data:
-        turnosSemanaAnterior,
-    } = await supabase
-      .from("turnos")
-      .select(
-        "funcionario_id, zona_id, dia_semana, periodo, hora_inicio, hora_fim"
+  const periodosPreferidos = (
+    funcionarioId: string,
+    dia: number
+  ): Periodo[] =>
+    disponibilidades
+      .filter(
+        (item) =>
+          item.funcionario_id ===
+            funcionarioId &&
+          item.dia_semana ===
+            dia &&
+          item.disponivel &&
+          item.periodo
       )
-      .eq(
-        "escala_id",
-        escalaAnterior.id
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
+      .map(
+        (item) =>
+          item.periodo as Periodo
       );
 
-    for (
-      const turno of
-        turnosSemanaAnterior ??
-        []
+  /*
+   * ==========================================================
+   * HORÁRIO REAL DO RESTAURANTE
+   * ==========================================================
+   */
+
+  const horarioDoTurno = (
+    funcionario: PerfilFuncionario,
+    dia: number,
+    periodo: Periodo
+  ) => {
+    const horario =
+      horariosPorDia.get(
+        dia
+      );
+
+    if (
+      !horario ||
+      horario.fechado
     ) {
-      adicionarTurnoNaMemoria(
-        memoriaTurnos,
-        {
-          funcionario_id:
-            turno.funcionario_id,
-
-          dia_semana:
-            turno.dia_semana,
-
-          periodo:
-            turno.periodo as Periodo,
-
-          hora_inicio:
-            turno.hora_inicio?.slice(
-              0,
-              5
-            ) ?? "00:00",
-
-          hora_fim:
-            turno.hora_fim?.slice(
-              0,
-              5
-            ) ?? "00:00",
-
-          zona_id:
-            turno.zona_id,
-        }
-      );
+      return null;
     }
-  }
 
-  /**
-   * ========================================================
-   * COBERTURA
-   * ========================================================
+    const abertura =
+      paraMinutos(
+        horario.abertura
+      );
+
+    const fechamento =
+      paraMinutos(
+        horario.fechamento
+      );
+
+    const inicioPeriodo =
+      inicioDosPeriodos(
+        horario.abertura,
+        horario.fechamento
+      )[periodo];
+
+    const horasMaximas =
+      Math.max(
+        0,
+        (fechamento -
+          abertura -
+          funcionario.pausaAlmocoMinutos) /
+          60
+      );
+
+    return horasMaximas > 0
+      ? {
+          abertura,
+          fechamento,
+          inicioPeriodo,
+          horasMaximas,
+        }
+      : null;
+  };
+
+  /*
+   * ==========================================================
+   * DEMANDA POR DIA
+   * ==========================================================
    */
 
-  const cobertura =
-    new Map<
-      string,
-      number
-    >();
+  const periodoOperacionalDoTurno = (
+    periodo: Periodo
+  ): PeriodoOperacional => {
+    /*
+     * Os períodos operacionais do onboarding são diferentes
+     * dos períodos gravados em turnos.
+     * Mantemos o mapeamento explícito para não misturar
+     * Periodo com PeriodoDisponibilidade.
+     */
+    switch (periodo) {
+      case "Manhã":
+        return "Abertura";
+      case "Tarde":
+        return "Almoço";
+      case "Noite":
+        return "Tarde";
+      case "Fechamento":
+        return "Fechamento";
+    }
+  };
 
-  function chaveCobertura(
+  const nivelMovimento = (
+    dia: number,
+    periodo: Periodo
+  ): NivelMovimento | null => {
+    const periodoOperacional =
+      periodoOperacionalDoTurno(periodo);
+
+    const movimento = movimentos.find(
+      (item) =>
+        item.dia_semana === dia &&
+        item.periodo === periodoOperacional
+    );
+
+    return (
+      movimento?.nivel as NivelMovimento | undefined
+    ) ?? null;
+  };
+
+  const multiplicadorMovimento = (
+    nivel: NivelMovimento
+  ) => {
+    switch (nivel) {
+      case "baixo":
+        return 0.7;
+      case "normal":
+        return 1;
+      case "alto":
+        return 1.3;
+      case "muito_alto":
+        return 1.6;
+    }
+  };
+
+  const linhasNecessidadeDoSlot = (
     zonaId: string | null,
     dia: number,
     periodo: Periodo
-  ) {
-    return `${
-      zonaId ??
-      "sem-zona"
-    }:${dia}:${periodo}`;
-  }
+  ) => {
+    const periodoOperacional =
+      periodoOperacionalDoTurno(periodo);
 
-  for (
-    const turno of
-      turnosBase
-  ) {
-    const chave =
-      chaveCobertura(
-        turno.zona_id,
-        turno.dia_semana,
-        turno.periodo as Periodo
+    const candidatas = necessidades.filter(
+      (item) =>
+        item.dia_semana === dia &&
+        item.periodo === periodoOperacional &&
+        (item.zona_id === zonaId ||
+          item.zona_id === null)
+    );
+
+    const zonaEspecifica =
+      candidatas.filter(
+        (item) => item.zona_id === zonaId
       );
 
-    cobertura.set(
-      chave,
-      (
-        cobertura.get(
-          chave
-        ) ?? 0
-      ) + 1
-    );
-  }
+    const linhas =
+      zonaEspecifica.length > 0
+        ? zonaEspecifica
+        : candidatas.filter(
+            (item) => item.zona_id === null
+          );
 
-  /**
-   * ========================================================
-   * NECESSIDADES
-   * ========================================================
+    const comFuncao = linhas.filter(
+      (item) =>
+        typeof item.funcao === "string" &&
+        item.funcao.trim().length > 0
+    );
+
+    return comFuncao.length > 0
+      ? comFuncao
+      : linhas.filter(
+          (item) =>
+            !item.funcao ||
+            item.funcao.trim().length === 0
+        );
+  };
+
+  const resolverNecessidade = (
+    zonaId: string | null,
+    dia: number,
+    periodo: Periodo
+  ): SlotNecessidade => {
+    const linhas =
+      linhasNecessidadeDoSlot(
+        zonaId,
+        dia,
+        periodo
+      );
+
+    if (linhas.length > 0) {
+      const minimo = linhas.reduce(
+        (total, item) =>
+          total + Math.max(0, Number(item.minimo ?? 0)),
+        0
+      );
+      const ideal = linhas.reduce(
+        (total, item) =>
+          total + Math.max(0, Number(item.ideal ?? 0)),
+        0
+      );
+      const maximo = linhas.reduce(
+        (total, item) =>
+          total + Math.max(0, Number(item.maximo ?? 0)),
+        0
+      );
+
+      return {
+        minimo: Math.min(minimo, ideal),
+        ideal: Math.max(
+          minimo,
+          ideal
+        ),
+        maximo: Math.max(
+          ideal,
+          maximo
+        ),
+        funcao:
+          linhas.length === 1
+            ? linhas[0].funcao?.trim() || undefined
+            : undefined,
+        explicita: true,
+      };
+    }
+
+    const zona =
+      zonas.find(
+        (item) => item.id === zonaId
+      );
+
+    const capacidadeBase =
+      zona
+        ? Math.max(
+            zona.capacidade_minima,
+            1
+          )
+        : 1;
+
+    const nivel = nivelMovimento(
+      dia,
+      periodo
+    );
+
+    if (nivel) {
+      const ideal = Math.ceil(
+        capacidadeBase *
+          multiplicadorMovimento(nivel)
+      );
+
+      return {
+        /*
+         * Mesmo com movimento baixo, um período operacional
+         * aberto precisa de uma cobertura mínima operacional.
+         * O valor continua sendo 1 apenas no fallback de movimento;
+         * necessidades_equipe explícitas continuam a ter prioridade.
+         */
+        minimo: 1,
+        ideal,
+        maximo: ideal + 1,
+        explicita: false,
+      };
+    }
+
+    const ideal = modoAltaDemanda
+      ? Math.ceil(
+          capacidadeBase *
+            MULTIPLICADOR_COBERTURA_EVENTO
+        )
+      : capacidadeBase;
+
+    return {
+      minimo: capacidadeBase,
+      ideal,
+      maximo: ideal,
+      explicita: false,
+    };
+  };
+
+  const capacidadeDiaZona = (
+    zonaId: string | null,
+    dia: number
+  ) => {
+    if (
+      !horariosPorDia.has(
+        dia
+      )
+    ) {
+      return 0;
+    }
+
+    return PERIODOS.reduce(
+      (total, periodo) =>
+        total +
+        resolverNecessidade(
+          zonaId,
+          dia,
+          periodo
+        ).ideal,
+      0
+    );
+  };
+
+  const minimoDiaZona = (
+    zonaId: string | null,
+    dia: number
+  ) => {
+    if (
+      !horariosPorDia.has(
+        dia
+      )
+    ) {
+      return 0;
+    }
+
+    return PERIODOS.reduce(
+      (maiorMinimo, periodo) =>
+        Math.max(
+          maiorMinimo,
+          resolverNecessidade(
+            zonaId,
+            dia,
+            periodo
+          ).minimo
+        ),
+      0
+    );
+  };
+
+  /*
+   * ==========================================================
+   * PLANEAMENTO DOS DIAS DE TRABALHO
+   * ==========================================================
+   *
+   * Esta é a principal mudança.
+   *
+   * Antes:
+   *
+   *   dia -> escolher funcionários
+   *
+   * Agora:
+   *
+   *   funcionário -> escolher dias
+   *   semana inteira -> equilibrar cobertura
    */
 
-  const zonasDaEscala:
-    (
-      | {
-          id: string;
-          capacidade_minima: number;
-        }
-      | null
-    )[] =
-    usaZonas
-      ? zonas
-      : [null];
+  const diasTrabalhoPlanejados =
+    new Map<
+      string,
+      Set<number>
+    >(
+      funcionarios.map(
+        (funcionario) => [
+          funcionario.id,
+          new Set<number>(
+            diasOcupados.get(
+              funcionario.id
+            ) ?? []
+          ),
+        ]
+      )
+    );
 
-  if (
-    usaZonas &&
-    zonasDaEscala.length ===
-      0
-  ) {
-    return {
-      erro:
-        "O restaurante está configurado para usar zonas, mas não existem zonas ativas.",
-    };
-  }
+  /*
+   * Quanto menor a cobertura do dia,
+   * maior a prioridade para trabalhar nele.
+   */
+  const scoreDia = (
+    funcionario: PerfilFuncionario,
+    dia: number,
+    escolhidos: Set<number>
+  ) => {
+    const zonaId = usaZonas
+      ? funcionario.zonaId
+      : null;
 
-  const capacidadeParaZona =
-    (
-      zonaId: string | null
-    ) => {
-      const zona =
-        zonas.find(
-          (item) =>
-            item.id ===
-            zonaId
-        );
+    const chave =
+      `${
+        zonaId ??
+        "sem-zona"
+      }:${dia}`;
 
-      const base =
-        zona
-          ? Math.max(
-              Number(
-                zona.capacidade_minima
-              ) || 1,
-              1
-            )
-          : 1;
+    const trabalhadores =
+      trabalhadoresPorDiaZona.get(
+        chave
+      ) ?? 0;
 
-      return modoAltaDemanda
-        ? Math.ceil(
-            base *
-              MULTIPLICADOR_COBERTURA_EVENTO
-          )
-        : base;
-    };
+    const minimo =
+      minimoDiaZona(
+        zonaId,
+        dia
+      );
 
-  const slots: SlotNecessidade[] =
-    [];
+    const capacidade =
+      Math.max(
+        minimo,
+        1
+      );
 
-  for (
-    const dia of
-      diasParaProcessar
-  ) {
-    for (
-      const zona of
-        zonasDaEscala
+    let score =
+      -(
+        trabalhadores /
+        capacidade
+      ) * 100;
+
+    /*
+     * Se o restaurante marcou
+     * cobertura de fim de semana como prioritária,
+     * damos uma pequena vantagem.
+     */
+    if (
+      restaurante?.cobertura_fds_prioritaria &&
+      (
+        dia === SEXTA ||
+        dia === SABADO ||
+        dia === DOMINGO
+      )
     ) {
-      const zonaId =
-        zona?.id ??
-        null;
+      score += 12;
+    }
 
-      const capacidade =
-        capacidadeParaZona(
-          zonaId
+    /*
+     * Evita sequências muito concentradas.
+     */
+    const anterior =
+      dia > 0 &&
+      escolhidos.has(
+        dia - 1
+      );
+
+    const seguinte =
+      dia < 6 &&
+      escolhidos.has(
+        dia + 1
+      );
+
+    if (
+      anterior &&
+      seguinte
+    ) {
+      score -= 18;
+    }
+
+    if (anterior) {
+      score -= 3;
+    }
+
+    if (seguinte) {
+      score -= 3;
+    }
+
+    /*
+     * Desempate determinístico.
+     */
+    score +=
+      (6 - dia) * 0.01;
+
+    return score;
+  };
+
+  /*
+   * Primeiro damos prioridade aos funcionários
+   * que ainda precisam de mais dias.
+   */
+  const paraPlanejar =
+    [...funcionarios].sort(
+      (a, b) => {
+        const faltaA =
+          Math.max(
+            0,
+            a.diasTrabalhoAlvo -
+              (
+                diasTrabalhoPlanejados.get(
+                  a.id
+                )?.size ?? 0
+              )
+          );
+
+        const faltaB =
+          Math.max(
+            0,
+            b.diasTrabalhoAlvo -
+              (
+                diasTrabalhoPlanejados.get(
+                  b.id
+                )?.size ?? 0
+              )
+          );
+
+        return (
+          faltaB -
+            faltaA ||
+          a.id.localeCompare(
+            b.id
+          )
         );
-
-      for (
-        const periodo of
-          PERIODOS_TURNO
-      ) {
-        const preenchido =
-          cobertura.get(
-            chaveCobertura(
-              zonaId,
-              dia,
-              periodo
-            )
-          ) ?? 0;
-
-        slots.push({
-          zonaId,
-
-          dia,
-
-          periodo,
-
-          capacidade,
-
-          preenchido,
-        });
       }
+    );
+
+  /*
+   * Escolhe os dias de cada funcionário.
+   */
+  for (
+    const funcionario of
+      paraPlanejar
+  ) {
+    const escolhidos =
+      diasTrabalhoPlanejados.get(
+        funcionario.id
+      )!;
+
+    const faltam =
+      Math.max(
+        0,
+        funcionario.diasTrabalhoAlvo -
+          escolhidos.size
+      );
+
+    for (
+      let i = 0;
+      i < faltam;
+      i++
+    ) {
+      const candidatos =
+        diasParaProcessar
+          .filter(
+            (dia) => {
+              if (
+                escolhidos.has(
+                  dia
+                )
+              ) {
+                return false;
+              }
+
+              if (
+                indisponivelNoDia(
+                  funcionario.id,
+                  dia
+                )
+              ) {
+                return false;
+              }
+
+              if (
+                usaZonas &&
+                !funcionario.zonaId
+              ) {
+                return false;
+              }
+
+              return true;
+            }
+          )
+          .sort(
+            (a, b) =>
+              scoreDia(
+                funcionario,
+                b,
+                escolhidos
+              ) -
+              scoreDia(
+                funcionario,
+                a,
+                escolhidos
+              )
+          );
+
+      const dia =
+        candidatos[0];
+
+      if (
+        dia === undefined
+      ) {
+        break;
+      }
+
+      escolhidos.add(
+        dia
+      );
+
+      const zonaId =
+        usaZonas
+          ? funcionario.zonaId
+          : null;
+
+      const chave =
+        `${
+          zonaId ??
+          "sem-zona"
+        }:${dia}`;
+
+      trabalhadoresPorDiaZona.set(
+        chave,
+        (
+          trabalhadoresPorDiaZona.get(
+            chave
+          ) ?? 0
+        ) + 1
+      );
     }
   }
 
-  /**
-   * ========================================================
-   * FUNÇÃO DE CANDIDATO
-   * ========================================================
-   */
-
-  const podeSerCandidato =
-    (
-      funcionario: PerfilFuncionario,
-      dia: number,
-      periodo: Periodo
-    ) => {
-      if (
-        usaZonas &&
-        !funcionario.zonaId
-      ) {
-        return false;
-      }
-
-      if (
-        usaZonas &&
-        funcionario.zonaId ===
-          null
-      ) {
-        return false;
-      }
-
-      if (
-        indisponivelNoDia(
-          disponibilidades,
-          funcionario.id,
-          dia
-        )
-      ) {
-        return false;
-      }
-
-      if (
-        periodoIndisponivel(
-          disponibilidades,
-          funcionario.id,
-          dia,
-          periodo
-        )
-      ) {
-        return false;
-      }
-
-      if (
-        diasTrabalhados
-          .get(
-            funcionario.id
-          )
-          ?.has(dia)
-      ) {
-        return false;
-      }
-
-      if (
-        (
-          horasRestantes.get(
-            funcionario.id
-          ) ?? 0
-        ) <= 0.01
-      ) {
-        return false;
-      }
-
-      if (
-        funcionario.diasTrabalhoAlvo <=
-        (
-          diasTrabalhados.get(
-            funcionario.id
-          )?.size ?? 0
-        )
-      ) {
-        return false;
-      }
-
-      const calculo =
-        calcularHorasDoTurno(
-          funcionario,
-          dia,
-          periodo,
-          horasRestantes,
-          diasTrabalhados,
-          horariosPorDia
-        );
-
-      if (!calculo) {
-        return false;
-      }
-
-      if (
-        !respeitaDescanso(
-          memoriaTurnos,
-          funcionario.id,
-          dia,
-          calculo.inicio
-        )
-      ) {
-        return false;
-      }
-
-      return true;
-    };
-
-  /**
-   * ========================================================
-   * SCORE DO CANDIDATO
-   * ========================================================
-   *
-   * Aqui começa a "inteligência" do motor.
-   *
-   * Não é uma IA generativa.
-   *
-   * É um sistema de decisão ponderada.
-   *
-   * Mais tarde podemos acrescentar dados do restaurante
-   * e transformar estes pesos em algo ainda mais sofisticado.
-   */
-
-  const scoreFuncionario =
-    (
-      funcionario: PerfilFuncionario,
-      dia: number,
-      periodo: Periodo,
-      zonaId: string | null
-    ): number => {
-      let score = 0;
-
-      const preferencias =
-        periodosPreferidos(
-          disponibilidades,
-          funcionario.id,
-          dia
-        );
-
-      const total =
-        possuiDisponibilidadeTotal(
-          disponibilidades,
-          funcionario.id,
-          dia
-        );
-
-      /**
-       * ------------------------------------------------------
-       * PREFERÊNCIA DE PERÍODO
-       * ------------------------------------------------------
-       */
-
-      if (
-        preferencias.includes(
-          periodo
-        )
-      ) {
-        /**
-         * Preferência específica recebe prioridade.
-         */
-        score += 55;
-      } else if (
-        total
-      ) {
-        /**
-         * Total é flexível, mas NÃO recebe a mesma
-         * prioridade que uma preferência específica.
-         */
-        score += 15;
-      } else if (
-        preferencias.length ===
-        0
-      ) {
-        /**
-         * Sem preferência explícita.
-         */
-        score += 5;
-      } else {
-        /**
-         * Existe preferência específica, mas estamos
-         * usando o funcionário fora dela.
-         */
-        score -= 12;
-      }
-
-      /**
-       * ------------------------------------------------------
-       * HORAS SEMANAIS
-       * ------------------------------------------------------
-       *
-       * Favorecemos quem está mais longe de completar
-       * a própria carga horária.
-       */
-
-      const maxHoras =
-        Math.max(
-          funcionario.cargaHorariaSemanalMax,
-          0.01
-        );
-
-      const horasRestantesFuncionario =
-        Math.max(
-          0,
-          horasRestantes.get(
-            funcionario.id
-          ) ?? 0
-        );
-
-      const percentualRestante =
-        Math.min(
-          1,
-          horasRestantesFuncionario /
-            maxHoras
-        );
-
-      score +=
-        percentualRestante *
-        30;
-
-      /**
-       * ------------------------------------------------------
-       * DIAS DE TRABALHO
-       * ------------------------------------------------------
-       */
-
-      const diasFeitos =
-        diasTrabalhados.get(
-          funcionario.id
-        )?.size ?? 0;
-
-      const diasRestantes =
-        Math.max(
-          0,
-          funcionario.diasTrabalhoAlvo -
-            diasFeitos
-        );
-
-      score +=
-        Math.min(
-          25,
-          diasRestantes * 5
-        );
-
-      /**
-       * ------------------------------------------------------
-       * FINS DE SEMANA
-       * ------------------------------------------------------
-       */
-
-      const contexto =
-        contextoDoDia(
-          dia
-        );
-
-      const finsDeSemana =
-        contarFinsDeSemana(
-          memoriaTurnos,
-          funcionario.id
-        );
-
-      if (
-        contexto.fimDeSemana
-      ) {
-        if (
-          restaurante
-            ?.cobertura_fds_prioritaria
-        ) {
-          score += 10;
-        }
-
-        /**
-         * Se já trabalhou muitos fins de semana,
-         * tentamos distribuir melhor.
-         */
-        score -=
-          finsDeSemana *
-          8;
-      }
-
-      /**
-       * ------------------------------------------------------
-       * FECHAMENTOS
-       * ------------------------------------------------------
-       */
-
-      const fechamentos =
-        contarFechamentos(
-          memoriaTurnos,
-          funcionario.id
-        );
-
-      if (
-        periodoEhFechamento(
-          periodo
-        )
-      ) {
-        /**
-         * Quanto mais fechamentos já possui,
-         * menor a prioridade.
-         */
-        score -=
-          fechamentos *
-          12;
-      } else {
-        /**
-         * Quem tem muitos fechamentos recebe
-         * uma pequena compensação para outros períodos.
-         */
-        score +=
-          Math.min(
-            fechamentos * 2,
-            8
-          );
-      }
-
-      /**
-       * ------------------------------------------------------
-       * ESTABILIDADE DE HORÁRIO
-       * ------------------------------------------------------
-       */
-
-      const diaAnterior =
-        dia === SEGUNDA
-          ? DOMINGO
-          : dia - 1;
-
-      const turnoAnterior =
-        turnoDoDia(
-          memoriaTurnos,
-          funcionario.id,
-          diaAnterior
-        );
-
-      if (
-        turnoAnterior
-      ) {
-        if (
-          turnoAnterior.periodo ===
-          periodo
-        ) {
-          score += 12;
-        } else if (
-          mesmoPeriodoOuVizinho(
-            turnoAnterior.periodo,
-            periodo
-          )
-        ) {
-          score += 4;
-        } else {
-          score -= 8;
-        }
-      }
-
-      /**
-       * ------------------------------------------------------
-       * SEQUÊNCIA DE DIAS
-       * ------------------------------------------------------
-       */
-
-      const sequencia =
-        contarSequenciaAnterior(
-          diasTrabalhados.get(
-            funcionario.id
-          ) ??
-            new Set<number>(),
-          dia
-        );
-
-      /**
-       * Trabalhar 4/5 dias seguidos pode ser perfeitamente
-       * normal.
-       *
-       * A partir daí começamos a penalizar.
-       */
-      if (
-        sequencia >= 5
-      ) {
-        score -=
-          (sequencia - 4) *
-          10;
-      }
-
-      /**
-       * ------------------------------------------------------
-       * DESCANSO
-       * ------------------------------------------------------
-       */
-
-      const calculo =
-        calcularHorasDoTurno(
-          funcionario,
-          dia,
-          periodo,
-          horasRestantes,
-          diasTrabalhados,
-          horariosPorDia
-        );
-
-      if (
-        calculo
-      ) {
-        const anterior =
-          turnoDoDia(
-            memoriaTurnos,
-            funcionario.id,
-            diaAnterior
-          );
-
-        if (
-          anterior
-        ) {
-          const descanso =
-            descansoEntreTurnos(
-              anterior,
-              {
-                dia,
-                horaInicio:
-                  calculo.inicio,
-              }
-            );
-
-          if (
-            descanso <
-            DESCANSO_IDEAL_MINUTOS
-          ) {
-            score -= 18;
-          }
-        }
-      }
-
-      /**
-       * ------------------------------------------------------
-       * NECESSIDADE DO DIA
-       * ------------------------------------------------------
-       *
-       * Se o dia ainda não possui ninguém naquela zona,
-       * damos prioridade para não deixar um restaurante
-       * aberto sem qualquer colaborador.
-       */
-
-      const trabalhadoresNoDia =
-        Array.from(
-          memoriaTurnos.values()
-        ).filter(
-          (lista) =>
-            lista.some(
-              (turno) =>
-                turno.dia_semana ===
-                  dia &&
-                (
-                  !usaZonas ||
-                  turno.zona_id ===
-                    zonaId
-                )
-            )
-        ).length;
-
-      if (
-        trabalhadoresNoDia ===
-        0
-      ) {
-        score += 45;
-      }
-
-      /**
-       * ------------------------------------------------------
-       * PEQUENO PESO PARA EVITAR SEMPRE OS MESMOS
-       * ------------------------------------------------------
-       */
-
-      score +=
-        funcionario.id
-          .split("")
-          .reduce(
-            (
-              total,
-              caractere
-            ) =>
-              total +
-              caractere.charCodeAt(
-                0
-              ),
-            0
-          ) %
-          10 *
-          0.01;
-
-      return score;
-    };
-
-  /**
-   * ========================================================
-   * ALOCAÇÃO
-   * ========================================================
+  /*
+   * ==========================================================
+   * DISTRIBUIÇÃO DOS TURNOS
+   * ==========================================================
    */
 
   const novosTurnos: TurnoNovo[] =
     [];
 
-  const alocar =
-    (
-      funcionario: PerfilFuncionario,
-      zonaId: string | null,
-      dia: number,
-      periodo: Periodo
-    ): boolean => {
-      const calculo =
-        calcularHorasDoTurno(
-          funcionario,
-          dia,
-          periodo,
-          horasRestantes,
-          diasTrabalhados,
-          horariosPorDia
-        );
+  const coberturaNova =
+    new Map(
+      coberturaExistente
+    );
 
-      if (!calculo) {
-        return false;
-      }
+  const horasPlanejadas = (
+    funcionario: PerfilFuncionario,
+    dia: number,
+    periodo: Periodo
+  ) => {
+    const horario =
+      horarioDoTurno(
+        funcionario,
+        dia,
+        periodo
+      );
 
-      /**
-       * Última verificação de segurança.
-       */
+    if (!horario) {
+      return 0;
+    }
+
+    const restantes =
+      horasRestantes.get(
+        funcionario.id
+      ) ?? 0;
+
+    const planejados =
+      diasTrabalhoPlanejados.get(
+        funcionario.id
+      )?.size ?? 0;
+
+    const ocupados =
+      diasOcupados.get(
+        funcionario.id
+      )?.size ?? 0;
+
+    const diasRestantes =
+      Math.max(
+        1,
+        planejados -
+          ocupados
+      );
+
+    if (
+      restantes <= 0
+    ) {
+      return 0;
+    }
+
+    return Math.min(
+      restantes /
+        diasRestantes,
+      horario.horasMaximas
+    );
+  };
+
+  const alocar = (
+    funcionario: PerfilFuncionario,
+    zonaId: string | null,
+    dia: number,
+    periodo: Periodo,
+    foraPreferencia: boolean
+  ) => {
+    const horario =
+      horarioDoTurno(
+        funcionario,
+        dia,
+        periodo
+      );
+
+    if (!horario) {
+      return false;
+    }
+
+    const planejados =
+      diasTrabalhoPlanejados.get(
+        funcionario.id
+      )!;
+
+    const diaFoiAdicionadoAoPlanejamento =
+      !planejados.has(dia);
+
+    let diaAntigoTrocado: number | null =
+      null;
+
+    /*
+     * Durante a garantia de cobertura mínima, podemos precisar
+     * trazer um funcionário para um dia que ainda não estava
+     * planeado para ele. Isso só é permitido enquanto ele ainda
+     * não atingiu o número alvo de dias da semana.
+     */
+    if (
+      diaFoiAdicionadoAoPlanejamento
+    ) {
       if (
-        !respeitaDescanso(
-          memoriaTurnos,
-          funcionario.id,
-          dia,
-          calculo.inicio
-        )
+        planejados.size >=
+        funcionario.diasTrabalhoAlvo
       ) {
-        return false;
+        diaAntigoTrocado =
+          tentarTrocarDiaPlanejado(
+            funcionario,
+            dia
+          );
+
+        if (diaAntigoTrocado === null) {
+          return false;
+        }
+      } else {
+        planejados.add(dia);
+
+        const chaveDiaZona =
+          `${
+          zonaId ??
+          "sem-zona"
+        }:${dia}`;
+
+        trabalhadoresPorDiaZona.set(
+          chaveDiaZona,
+          (
+            trabalhadoresPorDiaZona.get(
+              chaveDiaZona
+            ) ?? 0
+          ) + 1
+        );
+      }
+    }
+
+    const horas =
+      horasPlanejadas(
+        funcionario,
+        dia,
+        periodo
+      );
+
+    if (
+      horas <= 0
+    ) {
+      if (diaAntigoTrocado !== null) {
+        const chaveAntiga =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${diaAntigoTrocado}`;
+        const chaveNova =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${dia}`;
+
+        planejados.delete(dia);
+        planejados.add(diaAntigoTrocado);
+
+        trabalhadoresPorDiaZona.set(
+          chaveNova,
+          Math.max(
+            0,
+            (
+              trabalhadoresPorDiaZona.get(
+                chaveNova
+              ) ?? 1
+            ) - 1
+          )
+        );
+        trabalhadoresPorDiaZona.set(
+          chaveAntiga,
+          (
+            trabalhadoresPorDiaZona.get(
+              chaveAntiga
+            ) ?? 0
+          ) + 1
+        );
+      } else if (diaFoiAdicionadoAoPlanejamento) {
+        planejados.delete(dia);
+
+        const chaveDiaZona =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${dia}`;
+
+        trabalhadoresPorDiaZona.set(
+          chaveDiaZona,
+          Math.max(
+            0,
+            (
+              trabalhadoresPorDiaZona.get(
+                chaveDiaZona
+              ) ?? 1
+            ) - 1
+          )
+        );
       }
 
-      const preferencias =
-        periodosPreferidos(
-          disponibilidades,
-          funcionario.id,
-          dia
-        );
+      return false;
+    }
 
-      const total =
-        possuiDisponibilidadeTotal(
-          disponibilidades,
-          funcionario.id,
-          dia
-        );
-
-      const foraPreferencia =
-        !total &&
-        preferencias.length >
-          0 &&
-        !preferencias.includes(
-          periodo
-        );
-
-      const turno: TurnoNovo =
-        {
-          restaurante_id:
-            gerente.restauranteId,
-
-          escala_id:
-            escalaId,
-
-          funcionario_id:
-            funcionario.id,
-
-          zona_id:
-            zonaId,
-
-          dia_semana:
-            dia,
-
-          periodo,
-
-          hora_inicio:
-            paraHora(
-              calculo.inicio
-            ),
-
-          hora_fim:
-            paraHora(
-              calculo.fim
-            ),
-
-          fora_preferencia:
-            foraPreferencia,
-
-          status:
-            "agendado",
-        };
-
-      novosTurnos.push(
-        turno
+    const necessidade =
+      resolverNecessidade(
+        zonaId,
+        dia,
+        periodo
       );
 
-      const memoria:
-        TurnoMemoria =
-        {
-          funcionario_id:
-            funcionario.id,
+    const chaveCobertura =
+      `${
+        zonaId ??
+        "sem-zona"
+      }:${dia}:${periodo}`;
 
-          dia_semana:
-            dia,
+    const coberturaAtual =
+      coberturaNova.get(
+        chaveCobertura
+      ) ?? 0;
 
-          periodo,
+    if (
+      coberturaAtual >=
+      necessidade.maximo
+    ) {
+      if (diaAntigoTrocado !== null) {
+        const chaveAntiga =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${diaAntigoTrocado}`;
+        const chaveNova =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${dia}`;
 
-          hora_inicio:
-            turno.hora_inicio,
+        planejados.delete(dia);
+        planejados.add(diaAntigoTrocado);
 
-          hora_fim:
-            turno.hora_fim,
-
-          zona_id:
-            zonaId,
-        };
-
-      adicionarTurnoNaMemoria(
-        memoriaTurnos,
-        memoria
-      );
-
-      diasTrabalhados
-        .get(
-          funcionario.id
-        )
-        ?.add(dia);
-
-      horasRestantes.set(
-        funcionario.id,
-        Math.max(
-          0,
+        trabalhadoresPorDiaZona.set(
+          chaveNova,
+          Math.max(
+            0,
+            (
+              trabalhadoresPorDiaZona.get(
+                chaveNova
+              ) ?? 1
+            ) - 1
+          )
+        );
+        trabalhadoresPorDiaZona.set(
+          chaveAntiga,
           (
-            horasRestantes.get(
-              funcionario.id
+            trabalhadoresPorDiaZona.get(
+              chaveAntiga
             ) ?? 0
-          ) -
-            calculo.horas
+          ) + 1
+        );
+      } else if (diaFoiAdicionadoAoPlanejamento) {
+        planejados.delete(dia);
+
+        const chaveDiaZona =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${dia}`;
+
+        trabalhadoresPorDiaZona.set(
+          chaveDiaZona,
+          Math.max(
+            0,
+            (
+              trabalhadoresPorDiaZona.get(
+                chaveDiaZona
+              ) ?? 1
+            ) - 1
+          )
+        );
+      }
+
+      return false;
+    }
+
+    const inicio =
+      Math.max(
+        horario.abertura,
+        Math.min(
+          horario.inicioPeriodo,
+          horario.fechamento -
+            (
+              horas * 60 +
+              funcionario.pausaAlmocoMinutos
+            )
         )
       );
 
-      const chave =
-        chaveCobertura(
-          zonaId,
-          dia,
-          periodo
-        );
+    novosTurnos.push({
+      restaurante_id:
+        gerente.restauranteId,
 
-      cobertura.set(
-        chave,
+      escala_id:
+        escalaId,
+
+      funcionario_id:
+        funcionario.id,
+
+      zona_id:
+        zonaId,
+
+      dia_semana:
+        dia,
+
+      periodo,
+
+      hora_inicio:
+        paraHora(inicio),
+
+      hora_fim:
+        paraHora(
+          inicio +
+            horas * 60 +
+            funcionario.pausaAlmocoMinutos
+        ),
+
+      fora_preferencia:
+        foraPreferencia,
+
+      status:
+        "agendado",
+    });
+
+    diasOcupados
+      .get(
+        funcionario.id
+      )
+      ?.add(dia);
+
+    horasRestantes.set(
+      funcionario.id,
+      Math.max(
+        0,
         (
-          cobertura.get(
-            chave
+          horasRestantes.get(
+            funcionario.id
           ) ?? 0
-        ) + 1
+        ) - horas
+      )
+    );
+
+    coberturaNova.set(
+      chaveCobertura,
+      (
+        coberturaNova.get(
+          chaveCobertura
+        ) ?? 0
+      ) + 1
+    );
+
+    return true;
+  };
+  /*
+   * ==========================================================
+   * ESCOLHA DO FUNCIONÁRIO PARA CADA PERÍODO
+   * ==========================================================
+   */
+
+  const encontrarDiaPlanejadoParaTroca = (
+    funcionario: PerfilFuncionario,
+    diaNovo: number
+  ) => {
+    const planejados =
+      diasTrabalhoPlanejados.get(
+        funcionario.id
       );
 
-      return true;
-    };
+    if (!planejados || planejados.has(diaNovo)) {
+      return null;
+    }
 
-  /**
-   * ========================================================
-   * FASE 1
+    const ocupados =
+      diasOcupados.get(
+        funcionario.id
+      );
+
+    const zonaId =
+      usaZonas
+        ? funcionario.zonaId
+        : null;
+
+    if (
+      indisponivelNoDia(
+        funcionario.id,
+        diaNovo
+      ) ||
+      (
+        usaZonas &&
+        !zonaId
+      )
+    ) {
+      return null;
+    }
+
+    const candidatos =
+      [...planejados]
+        .filter(
+          (diaAntigo) => {
+            if (
+              diaAntigo === diaNovo ||
+              ocupados?.has(diaAntigo) ||
+              diasPassados.has(diaAntigo)
+            ) {
+              return false;
+            }
+
+            const chaveAntiga =
+              `${
+                zonaId ??
+                "sem-zona"
+              }:${diaAntigo}`;
+
+            const trabalhadoresAntigos =
+              trabalhadoresPorDiaZona.get(
+                chaveAntiga
+              ) ?? 0;
+
+            const minimoAntigo =
+              minimoDiaZona(
+                zonaId,
+                diaAntigo
+              );
+
+            return (
+              trabalhadoresAntigos >
+              minimoAntigo
+            );
+          }
+        )
+        .sort(
+          (a, b) => {
+            const excessoA =
+              (
+                trabalhadoresPorDiaZona.get(
+                  `${
+                    zonaId ??
+                    "sem-zona"
+                  }:${a}`
+                ) ?? 0
+              ) -
+              minimoDiaZona(
+                zonaId,
+                a
+              );
+
+            const excessoB =
+              (
+                trabalhadoresPorDiaZona.get(
+                  `${
+                    zonaId ??
+                    "sem-zona"
+                  }:${b}`
+                ) ?? 0
+              ) -
+              minimoDiaZona(
+                zonaId,
+                b
+              );
+
+            return (
+              excessoB -
+              excessoA ||
+              b - a
+            );
+          }
+        );
+
+    return (
+      candidatos[0] ??
+      null
+    );
+  };
+
+  const tentarTrocarDiaPlanejado = (
+    funcionario: PerfilFuncionario,
+    diaNovo: number
+  ): number | null => {
+    const planejados =
+      diasTrabalhoPlanejados.get(
+        funcionario.id
+      );
+
+    const diaAntigo =
+      encontrarDiaPlanejadoParaTroca(
+        funcionario,
+        diaNovo
+      );
+
+    if (
+      !planejados ||
+      diaAntigo === null
+    ) {
+      return null;
+    }
+
+    const zonaId =
+      usaZonas
+        ? funcionario.zonaId
+        : null;
+
+    planejados.delete(
+      diaAntigo
+    );
+    planejados.add(
+      diaNovo
+    );
+
+    const chaveAntiga =
+      `${
+        zonaId ??
+        "sem-zona"
+      }:${diaAntigo}`;
+
+    const chaveNova =
+      `${
+        zonaId ??
+        "sem-zona"
+      }:${diaNovo}`;
+
+    trabalhadoresPorDiaZona.set(
+      chaveAntiga,
+      Math.max(
+        0,
+        (
+          trabalhadoresPorDiaZona.get(
+            chaveAntiga
+          ) ?? 1
+        ) - 1
+      )
+    );
+
+    trabalhadoresPorDiaZona.set(
+      chaveNova,
+      (
+        trabalhadoresPorDiaZona.get(
+          chaveNova
+        ) ?? 0
+      ) + 1
+    );
+
+    return diaAntigo;
+  };
+  const escolherFuncionario = (
+    zonaId: string | null,
+    dia: number,
+    periodo: Periodo,
+    respeitarPreferencia: boolean,
+    permitirDiaNaoPlanejado = false
+  ) =>
+    funcionarios
+      .filter(
+        (funcionario) => {
+          if (
+            usaZonas &&
+            funcionario.zonaId !==
+              zonaId
+          ) {
+            return false;
+          }
+
+          if (
+            diasOcupados
+              .get(
+                funcionario.id
+              )
+              ?.has(dia)
+          ) {
+            return false;
+          }
+
+          /*
+           * FUNDAMENTAL:
+           * ele só pode trabalhar neste dia
+           * se o planeamento semanal tiver escolhido
+           * este dia para ele.
+           */
+          const planejados =
+            diasTrabalhoPlanejados.get(
+              funcionario.id
+            );
+
+          if (
+            !planejados?.has(dia)
+          ) {
+            if (!permitirDiaNaoPlanejado) {
+              return false;
+            }
+
+            if (
+              planejados &&
+              planejados.size >=
+                funcionario.diasTrabalhoAlvo
+            ) {
+              if (
+                !encontrarDiaPlanejadoParaTroca(
+                  funcionario,
+                  dia
+                )
+              ) {
+                return false;
+              }
+            }
+          }
+
+          if (
+            indisponivelNoDia(
+              funcionario.id,
+              dia
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            periodoIndisponivel(
+              funcionario.id,
+              dia,
+              periodo
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            (
+              horasRestantes.get(
+                funcionario.id
+              ) ?? 0
+            ) <= 0
+          ) {
+            return false;
+          }
+
+          const necessidade =
+            resolverNecessidade(
+              zonaId,
+              dia,
+              periodo
+            );
+
+          const coberturaAtual =
+            coberturaNova.get(
+              `${
+                zonaId ??
+                "sem-zona"
+              }:${dia}:${periodo}`
+            ) ?? 0;
+
+          if (
+            coberturaAtual >=
+            necessidade.maximo
+          ) {
+            return false;
+          }
+
+          const preferencias =
+            periodosPreferidos(
+              funcionario.id,
+              dia
+            );
+
+          if (
+            respeitarPreferencia &&
+            preferencias.length >
+              0 &&
+            !preferencias.includes(
+              periodo
+            )
+          ) {
+            return false;
+          }
+
+          return !!horarioDoTurno(
+            funcionario,
+            dia,
+            periodo
+          );
+        }
+      )
+      .sort(
+        (a, b) => {
+          const scoreFuncionario = (
+            funcionario: PerfilFuncionario
+          ) => {
+            const preferencias =
+              periodosPreferidos(
+                funcionario.id,
+                dia
+              );
+
+            let score = preferencias.includes(
+              periodo
+            )
+              ? 100
+              : 0;
+
+            const linhas =
+              linhasNecessidadeDoSlot(
+                zonaId,
+                dia,
+                periodo
+              );
+
+            const cargo =
+              funcionario.cargo.trim().toLowerCase();
+
+            if (
+              cargo &&
+              linhas.some(
+                (linha) =>
+                  typeof linha.funcao === "string" &&
+                  linha.funcao.trim().toLowerCase() ===
+                    cargo
+              )
+            ) {
+              score += 25;
+            }
+
+            score +=
+              (horasRestantes.get(
+                funcionario.id
+              ) ?? 0) * 0.01;
+
+            return score;
+          };
+
+          return (
+            scoreFuncionario(b) -
+              scoreFuncionario(a) ||
+            a.id.localeCompare(
+              b.id
+            )
+          );
+        }
+      )[0];
+
+  /*
+   * ==========================================================
+   * ORDEM DOS DIAS
+   * ==========================================================
+   */
+
+  let vagasSemCandidato =
+    0;
+
+  const diasOrdenados =
+    [...diasParaProcessar].sort(
+      (a, b) => {
+        const demanda = (
+          dia: number
+        ) =>
+          (
+            usaZonas
+              ? zonas
+              : [null]
+          ).reduce(
+            (
+              total,
+              zona
+            ) =>
+              total +
+              capacidadeDiaZona(
+                zona?.id ??
+                  null,
+                dia
+              ),
+            0
+          );
+
+        const diferenca =
+          demanda(b) -
+          demanda(a);
+
+        if (
+          diferenca !==
+          0
+        ) {
+          return diferenca;
+        }
+
+        if (
+          restaurante?.cobertura_fds_prioritaria
+        ) {
+          const peso =
+            (
+              dia: number
+            ) =>
+              dia ===
+                SEXTA ||
+              dia ===
+                SABADO ||
+              dia ===
+                DOMINGO
+                ? 0
+                : 1;
+
+          return (
+            peso(a) -
+            peso(b)
+          );
+        }
+
+        return a - b;
+      }
+    );
+
+  /*
+   * ==========================================================
+   * COBERTURA MÍNIMA
+   * ==========================================================
    *
-   * GARANTIR QUE CADA DIA ABERTO TENHA PELO MENOS
-   * UMA PESSOA POR ZONA.
+   * Primeiro garantimos o piso operacional de cada slot.
+   * Só depois tentamos chegar ao ideal.
    *
-   * Esta é a correção principal do problema que vimos
-   * na terça-feira.
-   * ========================================================
+   * Isto evita que um período aberto fique vazio apenas porque
+   * a distribuição anterior consumiu os candidatos noutros
+   * períodos.
    */
 
   for (
     const dia of
-      diasParaProcessar
+      diasOrdenados
   ) {
+    const zonasDaEscala:
+      (
+        | {
+            id: string;
+            capacidade_minima: number;
+          }
+        | null
+      )[] =
+      usaZonas
+        ? zonas
+        : [null];
+
     for (
       const zona of
         zonasDaEscala
     ) {
       const zonaId =
-        zona?.id ??
-        null;
-
-      const existePessoa =
-        Array.from(
-          memoriaTurnos.values()
-        ).some(
-          (lista) =>
-            lista.some(
-              (turno) =>
-                turno.dia_semana ===
-                  dia &&
-                (
-                  !usaZonas ||
-                  turno.zona_id ===
-                    zonaId
-                )
-            )
-        );
-
-      if (
-        existePessoa
-      ) {
-        continue;
-      }
-
-      let melhor:
-        {
-          funcionario: PerfilFuncionario;
-          periodo: Periodo;
-          score: number;
-        } | null =
-        null;
+        zona?.id ?? null;
 
       for (
-        const funcionario of
-          funcionarios
+        const periodo of
+          PERIODOS
+      ) {
+        const chave =
+          `${
+            zonaId ??
+            "sem-zona"
+          }:${dia}:${periodo}`;
+
+        const necessidade =
+          resolverNecessidade(
+            zonaId,
+            dia,
+            periodo
+          );
+
+        let faltam =
+          Math.max(
+            0,
+            necessidade.minimo -
+              (
+                coberturaNova.get(
+                  chave
+                ) ?? 0
+              )
+          );
+
+        /*
+         * Primeiro tentamos manter as preferências.
+         * Se isso não for suficiente, sacrificamos a preferência
+         * antes de aceitar uma falha de cobertura mínima.
+         */
+        for (
+          const respeitarPreferencia of [
+            true,
+            false,
+          ]
+        ) {
+          while (
+            faltam > 0
+          ) {
+            const candidato =
+              escolherFuncionario(
+                zonaId,
+                dia,
+                periodo,
+                respeitarPreferencia,
+                true
+              );
+
+            if (!candidato) {
+              break;
+            }
+
+            const alocado =
+              alocar(
+                candidato,
+                zonaId,
+                dia,
+                periodo,
+                !periodosPreferidos(
+                  candidato.id,
+                  dia
+                ).includes(periodo)
+              );
+
+            if (!alocado) {
+              break;
+            }
+
+            faltam--;
+          }
+
+          if (faltam <= 0) {
+            break;
+          }
+        }
+
+        if (faltam > 0) {
+          vagasSemCandidato +=
+            faltam;
+        }
+      }
+    }
+  }
+
+  /*
+   * ==========================================================
+   * COBERTURA IDEAL
+   * ==========================================================
+   *
+   * Com todos os pisos atendidos tanto quanto possível,
+   * aproximamos cada slot do alvo ideal. Nesta fase já não
+   * adicionamos dias fora do planeamento semanal.
+   */
+
+  for (
+    const dia of
+      diasOrdenados
+  ) {
+    const zonasDaEscala:
+      (
+        | {
+            id: string;
+            capacidade_minima: number;
+          }
+        | null
+      )[] =
+      usaZonas
+        ? zonas
+        : [null];
+
+    for (
+      const zona of
+        zonasDaEscala
+    ) {
+      const zonaId =
+        zona?.id ?? null;
+
+      /*
+       * Primeiro tenta respeitar a preferência.
+       * Depois pode sair dela se faltar cobertura ideal.
+       */
+      for (
+        const respeitarPreferencia of [
+          true,
+          false,
+        ]
       ) {
         for (
           const periodo of
-            PERIODOS_TURNO
+            PERIODOS
         ) {
-          if (
-            !podeSerCandidato(
-              funcionario,
+          const chave =
+            `${
+              zonaId ??
+              "sem-zona"
+            }:${dia}:${periodo}`;
+
+          const necessidade =
+            resolverNecessidade(
+              zonaId,
               dia,
               periodo
-            )
-          ) {
-            continue;
-          }
-
-          const score =
-            scoreFuncionario(
-              funcionario,
-              dia,
-              periodo,
-              zonaId
             );
 
-          if (
-            !melhor ||
-            score >
-              melhor.score
+          let faltam =
+            Math.max(
+              0,
+              necessidade.ideal -
+                (
+                  coberturaNova.get(
+                    chave
+                  ) ?? 0
+                )
+            );
+
+          while (
+            faltam > 0
           ) {
-            melhor = {
-              funcionario,
-              periodo,
-              score,
-            };
+            const candidato =
+              escolherFuncionario(
+                zonaId,
+                dia,
+                periodo,
+                respeitarPreferencia,
+                false
+              );
+
+            if (!candidato) {
+              break;
+            }
+
+            const alocado =
+              alocar(
+                candidato,
+                zonaId,
+                dia,
+                periodo,
+                !respeitarPreferencia
+              );
+
+            if (!alocado) {
+              break;
+            }
+
+            faltam--;
           }
+
+          /*
+           * A falta do ideal não é tratada como vaga impossível.
+           * A métrica crítica é o mínimo; o ideal é um objetivo
+           * de otimização que pode ficar abaixo quando a equipa
+           * disponível não comporta mais pessoas.
+           */
         }
       }
-
-      if (
-        melhor
-      ) {
-        alocar(
-          melhor.funcionario,
-          zonaId,
-          dia,
-          melhor.periodo
-        );
-      }
     }
   }
 
-  /**
-   * ========================================================
-   * FASE 2
+  /*
+   * ==========================================================
+   * COMPLETAR DIAS PLANEJADOS
+   * ==========================================================
    *
-   * COMPLETAR A COBERTURA.
-   *
-   * Agora que todos os dias possíveis já receberam
-   * cobertura mínima, tentamos preencher cada período.
-   * ========================================================
-   */
-
-  let houveProgresso =
-    true;
-
-  while (
-    houveProgresso
-  ) {
-    houveProgresso =
-      false;
-
-    /**
-     * Apenas necessidades ainda abertas.
-     */
-    const pendentes =
-      slots.filter(
-        (slot) =>
-          slot.preenchido <
-          slot.capacidade
-      );
-
-    if (
-      pendentes.length ===
-      0
-    ) {
-      break;
-    }
-
-    /**
-     * Para cada vaga, calculamos quantos candidatos
-     * realmente podem preenchê-la.
-     *
-     * Vagas com poucos candidatos recebem prioridade.
-     */
-    const avaliadas =
-      pendentes
-        .map(
-          (slot) => {
-            const candidatos =
-              funcionarios.filter(
-                (funcionario) =>
-                  (
-                    !usaZonas ||
-                    funcionario.zonaId ===
-                      slot.zonaId
-                  ) &&
-                  podeSerCandidato(
-                    funcionario,
-                    slot.dia,
-                    slot.periodo
-                  )
-              );
-
-            const trabalhadoresDia =
-              Array.from(
-                memoriaTurnos.values()
-              ).filter(
-                (lista) =>
-                  lista.some(
-                    (turno) =>
-                      turno.dia_semana ===
-                        slot.dia &&
-                      (
-                        !usaZonas ||
-                        turno.zona_id ===
-                          slot.zonaId
-                      )
-                  )
-              ).length;
-
-            const contexto =
-              contextoDoDia(
-                slot.dia
-              );
-
-            let prioridade =
-              0;
-
-            /**
-             * Necessidade ainda grande.
-             */
-            prioridade +=
-              (
-                slot.capacidade -
-                slot.preenchido
-              ) * 25;
-
-            /**
-             * Poucos candidatos =
-             * situação mais urgente.
-             */
-            prioridade +=
-              Math.max(
-                0,
-                12 -
-                  candidatos.length
-              ) * 12;
-
-            /**
-             * Dia sem pessoas ainda.
-             */
-            if (
-              trabalhadoresDia ===
-              0
-            ) {
-              prioridade +=
-                80;
-            }
-
-            /**
-             * Fim de semana prioritário,
-             * quando o restaurante configurou isso.
-             */
-            if (
-              contexto.fimDeSemana &&
-              restaurante
-                ?.cobertura_fds_prioritaria
-            ) {
-              prioridade +=
-                15;
-            }
-
-            /**
-             * Pequeno peso para processar
-             * dias mais cedo quando tudo empata.
-             */
-            prioridade +=
-              (6 -
-                slot.dia) *
-              0.01;
-
-            return {
-              slot,
-
-              candidatos,
-
-              prioridade,
-            };
-          }
-        )
-        .filter(
-          (item) =>
-            item.candidatos
-              .length > 0
-        )
-        .sort(
-          (a, b) =>
-            b.prioridade -
-            a.prioridade
-        );
-
-    const atual =
-      avaliadas[0];
-
-    if (!atual) {
-      break;
-    }
-
-    /**
-     * Escolhemos o melhor funcionário para esta vaga.
-     */
-    let melhor:
-      {
-        funcionario: PerfilFuncionario;
-        score: number;
-      } | null =
-      null;
-
-    for (
-      const funcionario of
-        atual.candidatos
-    ) {
-      const score =
-        scoreFuncionario(
-          funcionario,
-          atual.slot.dia,
-          atual.slot.periodo,
-          atual.slot.zonaId
-        );
-
-      if (
-        !melhor ||
-        score >
-          melhor.score
-      ) {
-        melhor = {
-          funcionario,
-          score,
-        };
-      }
-    }
-
-    if (
-      !melhor
-    ) {
-      break;
-    }
-
-    const sucesso =
-      alocar(
-        melhor.funcionario,
-        atual.slot.zonaId,
-        atual.slot.dia,
-        atual.slot.periodo
-      );
-
-    if (
-      !sucesso
-    ) {
-      /**
-       * Evita loop infinito.
-       */
-      atual.slot.preenchido =
-        atual.slot.capacidade;
-      continue;
-    }
-
-    atual.slot.preenchido++;
-
-    houveProgresso =
-      true;
-  }
-
-  /**
-   * ========================================================
-   * FASE 3
-   *
-   * TENTATIVA DE USAR HORAS AINDA DISPONÍVEIS
-   * NOS DIAS JÁ PLANEADOS.
-   *
-   * Aqui não quebramos cobertura nem criamos
-   * dois turnos no mesmo dia.
-   * ========================================================
+   * Se alguém foi escolhido para trabalhar num dia,
+   * mas ainda não recebeu um turno durante a etapa de cobertura,
+   * tentamos colocá-lo no melhor período possível.
    */
 
   for (
     const funcionario of
-      funcionarios
-        .slice()
-        .sort(
-          (a, b) =>
+      [...funcionarios].sort(
+        (a, b) =>
+          (
+            horasRestantes.get(
+              b.id
+            ) ?? 0
+          ) -
             (
               horasRestantes.get(
-                b.id
+                a.id
               ) ?? 0
-            ) -
-              (
-                horasRestantes.get(
-                  a.id
-                ) ?? 0
-              )
-        )
-  ) {
-    if (
-      (
-        horasRestantes.get(
-          funcionario.id
-        ) ?? 0
-      ) <= 0.01
-    ) {
-      continue;
-    }
-
-    if (
-      (
-        diasTrabalhados.get(
-          funcionario.id
-        )?.size ?? 0
-      ) >=
-      funcionario.diasTrabalhoAlvo
-    ) {
-      continue;
-    }
-
-    /**
-     * Primeiro tentamos dias em que ainda
-     * não há cobertura suficiente.
-     */
-    const diasOrdenados =
-      diasParaProcessar
-        .filter(
-          (dia) =>
-            !(
-              diasTrabalhados
-                .get(
-                  funcionario.id
-                )
-                ?.has(dia) ??
-              false
             )
-        )
-        .sort(
-          (a, b) => {
-            const scoreA =
-              scoreFuncionario(
-                funcionario,
-                a,
-                PERIODOS_TURNO[0],
-                usaZonas
-                  ? funcionario.zonaId
-                  : null
-              );
-
-            const scoreB =
-              scoreFuncionario(
-                funcionario,
-                b,
-                PERIODOS_TURNO[0],
-                usaZonas
-                  ? funcionario.zonaId
-                  : null
-              );
-
-            return (
-              scoreB -
-              scoreA
-            );
-          }
-        );
+      )
+  ) {
+    const planejados =
+      diasTrabalhoPlanejados.get(
+        funcionario.id
+      ) ??
+      new Set<number>();
 
     for (
       const dia of
-        diasOrdenados
+        [...planejados].sort(
+          (a, b) => a - b
+        )
     ) {
       if (
-        (
-          horasRestantes.get(
+        diasOcupados
+          .get(
             funcionario.id
-          ) ?? 0
-        ) <= 0.01
+          )
+          ?.has(dia)
       ) {
-        break;
-      }
-
-      if (
-        (
-          diasTrabalhados.get(
-            funcionario.id
-          )?.size ?? 0
-        ) >=
-        funcionario.diasTrabalhoAlvo
-      ) {
-        break;
+        continue;
       }
 
       const zonaId =
@@ -3108,72 +2467,65 @@ export async function gerarEscalaAutomatica(
 
       const preferencias =
         periodosPreferidos(
-          disponibilidades,
           funcionario.id,
           dia
         );
 
-      const periodosOrdenados =
-        PERIODOS_TURNO
-          .slice()
-          .sort(
-            (a, b) => {
-              const prefA =
-                preferencias.includes(
-                  a
-                )
-                  ? 1
-                  : 0;
+      const periodos =
+        [...PERIODOS].sort(
+          (a, b) => {
+            const prefA =
+              preferencias.includes(
+                a
+              )
+                ? 1
+                : 0;
 
-              const prefB =
-                preferencias.includes(
-                  b
-                )
-                  ? 1
-                  : 0;
+            const prefB =
+              preferencias.includes(
+                b
+              )
+                ? 1
+                : 0;
 
-              if (
-                prefA !==
-                prefB
-              ) {
-                return (
-                  prefB -
-                  prefA
-                );
-              }
-
-              const coberturaA =
-                cobertura.get(
-                  chaveCobertura(
-                    zonaId,
-                    dia,
-                    a
-                  )
-                ) ?? 0;
-
-              const coberturaB =
-                cobertura.get(
-                  chaveCobertura(
-                    zonaId,
-                    dia,
-                    b
-                  )
-                ) ?? 0;
-
+            if (
+              prefA !==
+              prefB
+            ) {
               return (
-                coberturaA -
-                coberturaB
+                prefB -
+                prefA
               );
             }
-          );
+
+            return (
+              (
+                horarioDoTurno(
+                  funcionario,
+                  dia,
+                  b
+                )?.horasMaximas ??
+                0
+              ) -
+              (
+                horarioDoTurno(
+                  funcionario,
+                  dia,
+                  a
+                )?.horasMaximas ??
+                0
+              )
+            );
+          }
+        );
 
       for (
         const periodo of
-          periodosOrdenados
+          periodos
       ) {
         if (
-          !podeSerCandidato(
-            funcionario,
+          periodoIndisponivel(
+            funcionario.id,
             dia,
             periodo
           )
@@ -3181,16 +2533,21 @@ export async function gerarEscalaAutomatica(
           continue;
         }
 
-        const sucesso =
+        const alocado =
           alocar(
             funcionario,
             zonaId,
             dia,
-            periodo
+            periodo,
+            preferencias.length >
+              0 &&
+              !preferencias.includes(
+                periodo
+              )
           );
 
         if (
-          sucesso
+          alocado
         ) {
           break;
         }
@@ -3198,56 +2555,22 @@ export async function gerarEscalaAutomatica(
     }
   }
 
-  /**
-   * ========================================================
-   * RESULTADO / VAGAS NÃO PREENCHIDAS
-   * ========================================================
-   */
-
-  let vagasSemCandidato =
-    0;
-
-  for (
-    const slot of
-      slots
-  ) {
-    const preenchido =
-      cobertura.get(
-        chaveCobertura(
-          slot.zonaId,
-          slot.dia,
-          slot.periodo
-        )
-      ) ?? 0;
-
-    const faltam =
-      Math.max(
-        0,
-        slot.capacidade -
-          preenchido
-      );
-
-    vagasSemCandidato +=
-      faltam;
-  }
-
-  /**
-   * ========================================================
+  /*
+   * ==========================================================
    * GRAVAR
-   * ========================================================
+   * ==========================================================
    */
 
   if (
     novosTurnos.length >
     0
   ) {
-    const {
-      error,
-    } = await supabase
-      .from("turnos")
-      .insert(
-        novosTurnos
-      );
+    const { error } =
+      await supabase
+        .from("turnos")
+        .insert(
+          novosTurnos
+        );
 
     if (error) {
       return {
@@ -3255,12 +2578,6 @@ export async function gerarEscalaAutomatica(
       };
     }
   }
-
-  /**
-   * ========================================================
-   * HORAS RESTANTES
-   * ========================================================
-   */
 
   const horasNaoAlocadas =
     arredondar(
@@ -3283,12 +2600,6 @@ export async function gerarEscalaAutomatica(
       (horas) =>
         horas > 0.01
     ).length;
-
-  /**
-   * ========================================================
-   * REVALIDAÇÃO
-   * ========================================================
-   */
 
   revalidatePath(
     "/escalas"
@@ -3314,32 +2625,6 @@ export async function gerarEscalaAutomatica(
   };
 }
 
-/**
- * ==========================================================
- * GERAR SEMANA SEGUINTE
- * ==========================================================
- *
- * Mantemos esta função porque a interface GradeSemanal
- * já utiliza esta Server Action.
- */
-export async function gerarEscalaSemanaSeguinte(
-  escalaId: string,
-  modoAltaDemanda = false
-): Promise<GerarEscalaState> {
-  return gerarEscalaAutomatica(
-    escalaId,
-    modoAltaDemanda,
-    false,
-    true
-  );
-}
-
-/**
- * ==========================================================
- * DELETAR ESCALA
- * ==========================================================
- */
-
 export async function deletarEscalaDaSemana(
   escalaId: string
 ): Promise<{
@@ -3353,24 +2638,18 @@ export async function deletarEscalaDaSemana(
 
   const {
     data: escala,
-    error:
-      erroEscala,
+    error: erroEscala,
   } = await supabase
     .from("escalas")
     .select("id")
-    .eq(
-      "id",
-      escalaId
-    )
+    .eq("id", escalaId)
     .eq(
       "restaurante_id",
       gerente.restauranteId
     )
     .maybeSingle();
 
-  if (
-    erroEscala
-  ) {
+  if (erroEscala) {
     return {
       erro: `Falha ao localizar a escala: ${erroEscala.message}`,
     };
@@ -3384,8 +2663,7 @@ export async function deletarEscalaDaSemana(
   }
 
   const {
-    error:
-      erroTurnos,
+    error: erroTurnos,
   } = await supabase
     .from("turnos")
     .delete()
@@ -3398,17 +2676,14 @@ export async function deletarEscalaDaSemana(
       gerente.restauranteId
     );
 
-  if (
-    erroTurnos
-  ) {
+  if (erroTurnos) {
     return {
       erro: `Falha ao deletar os turnos da semana: ${erroTurnos.message}`,
     };
   }
 
   const {
-    error:
-      erroDelete,
+    error: erroDelete,
   } = await supabase
     .from("escalas")
     .delete()
@@ -3421,9 +2696,7 @@ export async function deletarEscalaDaSemana(
       gerente.restauranteId
     );
 
-  if (
-    erroDelete
-  ) {
+  if (erroDelete) {
     return {
       erro: `Falha ao deletar a escala: ${erroDelete.message}`,
     };

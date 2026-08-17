@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { requireGerente } from "@/lib/auth/permissions";
 import { createClient } from "@/lib/supabase/server";
+import { NIVEIS_MOVIMENTO, PERIODOS_OPERACIONAIS } from "@/types/dominio";
 
 export interface OnboardingState {
   erro?: string;
@@ -49,12 +50,14 @@ function validarMovimentos(
       return "Dia da semana inválido na configuração de movimento.";
     }
 
-    if (!movimento.periodo?.trim()) {
+    if (
+      !(PERIODOS_OPERACIONAIS as string[]).includes(movimento.periodo)
+    ) {
       return "Período inválido na configuração de movimento.";
     }
 
     if (
-      !["baixo", "normal", "alto", "muito_alto"].includes(movimento.nivel)
+      !(NIVEIS_MOVIMENTO as string[]).includes(movimento.nivel)
     ) {
       return "Nível de movimento inválido.";
     }
@@ -75,7 +78,9 @@ function validarNecessidades(
       return "Dia da semana inválido na necessidade de equipa.";
     }
 
-    if (!necessidade.periodo?.trim()) {
+    if (
+      !(PERIODOS_OPERACIONAIS as string[]).includes(necessidade.periodo)
+    ) {
       return "Período inválido na necessidade de equipa.";
     }
 
@@ -206,9 +211,22 @@ export async function salvarConfiguracaoOperacional(
     };
   }
 
-  // As configurações novas são opcionais nesta fase.
-  // Isso mantém o onboarding atual funcionando enquanto a página
-  // ainda não envia esses campos.
+  // O onboarding envia sempre o estado completo de movimento e
+  // necessidade de equipa (o formulário reflete tudo que está
+  // configurado no momento). Por isso limpamos e regravamos as duas
+  // tabelas a cada envio — assim uma linha removida na UI também é
+  // removida no banco, e não fica "presa" de um envio anterior.
+  const { error: erroLimpezaMovimentos } = await supabase
+    .from("movimento_operacional")
+    .delete()
+    .eq("restaurante_id", gerente.restauranteId);
+
+  if (erroLimpezaMovimentos) {
+    return {
+      erro: `Falha ao atualizar movimento operacional: ${erroLimpezaMovimentos.message}`,
+    };
+  }
+
   if (movimentos.length > 0) {
     const movimentosParaSalvar = movimentos.map((movimento) => ({
       restaurante_id: gerente.restauranteId,
@@ -219,15 +237,24 @@ export async function salvarConfiguracaoOperacional(
 
     const { error: erroMovimentos } = await supabase
       .from("movimento_operacional")
-      .upsert(movimentosParaSalvar, {
-        onConflict: "restaurante_id,dia_semana,periodo",
-      });
+      .insert(movimentosParaSalvar);
 
     if (erroMovimentos) {
       return {
         erro: `Falha ao salvar movimento operacional: ${erroMovimentos.message}`,
       };
     }
+  }
+
+  const { error: erroLimpezaNecessidades } = await supabase
+    .from("necessidades_equipe")
+    .delete()
+    .eq("restaurante_id", gerente.restauranteId);
+
+  if (erroLimpezaNecessidades) {
+    return {
+      erro: `Falha ao atualizar necessidades de equipa: ${erroLimpezaNecessidades.message}`,
+    };
   }
 
   if (necessidades.length > 0) {
@@ -241,22 +268,6 @@ export async function salvarConfiguracaoOperacional(
       ideal: necessidade.ideal,
       maximo: necessidade.maximo,
     }));
-
-    // A tabela não possui uma chave única para a combinação
-    // dia/período/zona/função. Como o onboarding representa a
-    // configuração completa do restaurante, substituímos apenas
-    // as necessidades deste restaurante quando novas necessidades
-    // forem enviadas.
-    const { error: erroLimpeza } = await supabase
-      .from("necessidades_equipe")
-      .delete()
-      .eq("restaurante_id", gerente.restauranteId);
-
-    if (erroLimpeza) {
-      return {
-        erro: `Falha ao atualizar necessidades de equipa: ${erroLimpeza.message}`,
-      };
-    }
 
     const { error: erroNecessidades } = await supabase
       .from("necessidades_equipe")

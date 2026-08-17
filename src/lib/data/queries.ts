@@ -22,6 +22,32 @@ export async function getZonas(restauranteId: string): Promise<Zona[]> {
   }));
 }
 
+/**
+ * Cargos/funções já usados nos funcionários deste restaurante, sem
+ * duplicatas. Serve para sugerir (não obrigar) as mesmas funções na
+ * configuração de necessidade de equipa do onboarding — evita que o
+ * mesmo cargo seja digitado de formas diferentes em lugares diferentes.
+ */
+export async function getCargosExistentes(
+  restauranteId: string
+): Promise<string[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("funcionarios")
+    .select("cargo")
+    .eq("restaurante_id", restauranteId);
+
+  if (error) throw new Error(`Falha ao buscar cargos: ${error.message}`);
+
+  const cargos = new Set(
+    (data ?? [])
+      .map((f) => f.cargo?.trim())
+      .filter((cargo): cargo is string => !!cargo)
+  );
+
+  return Array.from(cargos).sort((a, b) => a.localeCompare(b, "pt"));
+}
+
 export async function getRestaurante(restauranteId: string): Promise<Restaurante> {
   const supabase = await createClient();
   const { data, error } = await supabase
