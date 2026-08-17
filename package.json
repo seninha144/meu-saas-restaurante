@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test:horarios": "node --experimental-strip-types --test tests/horarios-meia-noite.test.ts",
-    "test:ponto-automatico": "node --experimental-strip-types --test tests/ponto-automatico-horarios.test.ts"
+    "test:ponto-automatico": "node --experimental-strip-types --test tests/ponto-automatico-horarios.test.ts",
+    "test:regras-escala": "node --experimental-strip-types --test tests/regras-obrigatorias-escala.test.ts",
+    "test:historico-escalas": "node --experimental-strip-types --test tests/historico-escalas.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

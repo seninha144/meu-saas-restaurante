@@ -8,6 +8,23 @@ import {
   horasEfetivasDoTurno,
   intervaloEmMinutos,
 } from "@/lib/horas";
+import {
+  agruparMinimosPorFuncao,
+  funcionarioAtendeFuncao,
+  normalizarFuncao,
+  pontuarCoberturaDia,
+  respeitaDescansoMinimo,
+  respeitaMaximoDiasConsecutivos,
+  type JornadaAbsoluta,
+} from "@/lib/escalas/regras-obrigatorias";
+import {
+  agregarHistoricoTurnos,
+  calcularReferenciasJustica,
+  desempateSemanal,
+  pontuarJusticaDoDia,
+  pontuarJusticaHistorica,
+  type TurnoHistorico,
+} from "@/lib/escalas/historico";
 import { getInicioSemana, toISODate } from "@/lib/dates";
 import { createClient } from "@/lib/supabase/server";
 import { PERIODOS, type Periodo } from "@/types/dominio";
@@ -307,6 +324,57 @@ export async function gerarEscalaAutomatica(
     };
   }
 
+  const inicioHistorico = new Date(`${escala.semana_inicio}T00:00:00Z`);
+  inicioHistorico.setUTCDate(inicioHistorico.getUTCDate() - 28);
+
+  const { data: escalasHistoricas, error: erroEscalasHistoricas } = await supabase
+    .from("escalas")
+    .select("id, semana_inicio")
+    .eq("restaurante_id", gerente.restauranteId)
+    .gte("semana_inicio", toISODate(inicioHistorico))
+    .lt("semana_inicio", escala.semana_inicio);
+
+  if (erroEscalasHistoricas) {
+    return { erro: `Falha ao consultar o histórico de escalas: ${erroEscalasHistoricas.message}` };
+  }
+
+  const idsEscalasHistoricas = (escalasHistoricas ?? []).map((item) => item.id);
+  const { data: turnosHistoricosRaw, error: erroTurnosHistoricos } = idsEscalasHistoricas.length
+    ? await supabase
+        .from("turnos")
+        .select("escala_id, funcionario_id, dia_semana, periodo, hora_inicio, hora_fim")
+        .in("escala_id", idsEscalasHistoricas)
+        .eq("restaurante_id", gerente.restauranteId)
+    : { data: [], error: null };
+
+  if (erroTurnosHistoricos) {
+    return { erro: `Falha ao consultar turnos históricos: ${erroTurnosHistoricos.message}` };
+  }
+
+  const semanasPorEscala = new Map(
+    (escalasHistoricas ?? []).map((item) => [item.id, item.semana_inicio])
+  );
+  const turnosHistoricos: TurnoHistorico[] = (turnosHistoricosRaw ?? []).flatMap(
+    (turno) => {
+      const semanaInicio = semanasPorEscala.get(turno.escala_id);
+      if (!semanaInicio) return [];
+      return [{
+        funcionarioId: turno.funcionario_id,
+        semanaInicio,
+        diaSemana: turno.dia_semana,
+        periodo: turno.periodo as Periodo,
+        horaInicio: turno.hora_inicio,
+        horaFim: turno.hora_fim,
+      }];
+    }
+  );
+  const inicioSemanaAnterior = new Date(`${escala.semana_inicio}T00:00:00Z`);
+  inicioSemanaAnterior.setUTCDate(inicioSemanaAnterior.getUTCDate() - 7);
+  const semanaAnteriorISO = toISODate(inicioSemanaAnterior);
+  const turnosSemanaAnterior = turnosHistoricos.filter(
+    (turno) => turno.semanaInicio === semanaAnteriorISO
+  );
+
   const turnosSubstituidos =
     substituirTurnosExistentes
       ? turnosExistentes?.length ?? 0
@@ -485,6 +553,21 @@ export async function gerarEscalaAutomatica(
       })
     );
 
+  const metricasHistoricas = agregarHistoricoTurnos(
+    turnosHistoricos,
+    escala.semana_inicio,
+    funcionarios.map((funcionario) => funcionario.id)
+  );
+  const referenciasJustica = calcularReferenciasJustica(
+    metricasHistoricas,
+    new Map(
+      funcionarios.map((funcionario) => [
+        funcionario.id,
+        funcionario.cargaHorariaSemanalMax,
+      ])
+    )
+  );
+
   /*
    * ==========================================================
    * DIAS DA SEMANA
@@ -611,6 +694,38 @@ export async function gerarEscalaAutomatica(
       number
     >();
 
+  const jornadasPorFuncionario = new Map<string, JornadaAbsoluta[]>(
+    funcionarios.map((funcionario) => [funcionario.id, []])
+  );
+
+  const diasComJornadaPorFuncionario = new Map<string, Set<number>>(
+    funcionarios.map((funcionario) => [funcionario.id, new Set<number>()])
+  );
+
+  const adicionarJornadaExistente = (
+    funcionarioId: string,
+    diaAbsoluto: number,
+    horaInicio: string | null,
+    horaFim: string | null
+  ) => {
+    if (!horaInicio || !horaFim || !jornadasPorFuncionario.has(funcionarioId)) return;
+    const intervalo = intervaloEmMinutos(horaInicio.slice(0, 5), horaFim.slice(0, 5));
+    jornadasPorFuncionario.get(funcionarioId)?.push({
+      inicio: diaAbsoluto * 24 * 60 + intervalo.inicio,
+      fim: diaAbsoluto * 24 * 60 + intervalo.fim,
+    });
+    diasComJornadaPorFuncionario.get(funcionarioId)?.add(diaAbsoluto);
+  };
+
+  for (const turno of turnosSemanaAnterior ?? []) {
+    adicionarJornadaExistente(
+      turno.funcionarioId,
+      turno.diaSemana - 7,
+      turno.horaInicio,
+      turno.horaFim
+    );
+  }
+
   /*
    * Quantas pessoas estão atualmente
    * trabalhando por zona/dia.
@@ -624,6 +739,12 @@ export async function gerarEscalaAutomatica(
   for (
     const turno of turnosBase
   ) {
+    adicionarJornadaExistente(
+      turno.funcionario_id,
+      turno.dia_semana,
+      turno.hora_inicio,
+      turno.hora_fim
+    );
     diasOcupados
       .get(
         turno.funcionario_id
@@ -903,6 +1024,28 @@ export async function gerarEscalaAutomatica(
         );
   };
 
+  const chaveCoberturaFuncao = (
+    zonaId: string | null,
+    dia: number,
+    periodo: Periodo,
+    funcao: string
+  ) => `${zonaId ?? "sem-zona"}:${dia}:${periodo}:${normalizarFuncao(funcao)}`;
+
+  const coberturaFuncaoNova = new Map<string, number>();
+
+  for (const turno of turnosBase) {
+    const funcionario = funcionarios.find((item) => item.id === turno.funcionario_id);
+    if (!funcionario?.cargo.trim()) continue;
+    const periodo = turno.periodo as Periodo;
+    const funcoesExigidas = agruparMinimosPorFuncao(
+      linhasNecessidadeDoSlot(turno.zona_id, turno.dia_semana, periodo)
+    );
+    const cargo = normalizarFuncao(funcionario.cargo);
+    if (!funcoesExigidas.has(cargo)) continue;
+    const chave = chaveCoberturaFuncao(turno.zona_id, turno.dia_semana, periodo, cargo);
+    coberturaFuncaoNova.set(chave, (coberturaFuncaoNova.get(chave) ?? 0) + 1);
+  }
+
   const resolverNecessidade = (
     zonaId: string | null,
     dia: number,
@@ -1053,6 +1196,22 @@ export async function gerarEscalaAutomatica(
     );
   };
 
+  const idealDiaZona = (
+    zonaId: string | null,
+    dia: number
+  ) => {
+    if (!horariosPorDia.has(dia)) return 0;
+
+    return PERIODOS.reduce(
+      (maiorIdeal, periodo) =>
+        Math.max(
+          maiorIdeal,
+          resolverNecessidade(zonaId, dia, periodo).ideal
+        ),
+      0
+    );
+  };
+
   /*
    * ==========================================================
    * PLANEAMENTO DOS DIAS DE TRABALHO
@@ -1117,17 +1276,9 @@ export async function gerarEscalaAutomatica(
         dia
       );
 
-    const capacidade =
-      Math.max(
-        minimo,
-        1
-      );
+    const ideal = idealDiaZona(zonaId, dia);
 
-    let score =
-      -(
-        trabalhadores /
-        capacidade
-      ) * 100;
+    let score = pontuarCoberturaDia(trabalhadores, minimo, ideal);
 
     /*
      * Se o restaurante marcou
@@ -1143,6 +1294,16 @@ export async function gerarEscalaAutomatica(
       )
     ) {
       score += 12;
+    }
+
+    const metricas = metricasHistoricas.get(funcionario.id);
+    if (metricas) {
+      score += pontuarJusticaDoDia(
+        metricas,
+        funcionario.cargaHorariaSemanalMax,
+        referenciasJustica,
+        dia
+      );
     }
 
     /*
@@ -1216,9 +1377,8 @@ export async function gerarEscalaAutomatica(
         return (
           faltaB -
             faltaA ||
-          a.id.localeCompare(
-            b.id
-          )
+          desempateSemanal(`${escala.semana_inicio}:${b.id}:planejamento`) -
+            desempateSemanal(`${escala.semana_inicio}:${a.id}:planejamento`)
         );
       }
     );
@@ -1272,6 +1432,15 @@ export async function gerarEscalaAutomatica(
                 usaZonas &&
                 !funcionario.zonaId
               ) {
+                return false;
+              }
+
+              const diasComJornada = new Set([
+                ...(diasComJornadaPorFuncionario.get(funcionario.id) ?? []),
+                ...escolhidos,
+              ]);
+
+              if (!respeitaMaximoDiasConsecutivos(diasComJornada, dia)) {
                 return false;
               }
 
@@ -1397,7 +1566,8 @@ export async function gerarEscalaAutomatica(
     zonaId: string | null,
     dia: number,
     periodo: Periodo,
-    foraPreferencia: boolean
+    foraPreferencia: boolean,
+    funcaoObrigatoria?: string
   ) => {
     const horario =
       horarioDoTurno(
@@ -1470,8 +1640,34 @@ export async function gerarEscalaAutomatica(
         periodo
       );
 
+    const inicio = Math.max(
+      horario.abertura,
+      Math.min(
+        horario.inicioPeriodo,
+        horario.fechamento - (horas * 60 + funcionario.pausaAlmocoMinutos)
+      )
+    );
+    const novaJornada = {
+      inicio: dia * 24 * 60 + inicio,
+      fim:
+        dia * 24 * 60 +
+        inicio +
+        horas * 60 +
+        funcionario.pausaAlmocoMinutos,
+    };
+    const respeitaRegrasObrigatorias =
+      respeitaMaximoDiasConsecutivos(
+        diasComJornadaPorFuncionario.get(funcionario.id) ?? [],
+        dia
+      ) &&
+      respeitaDescansoMinimo(
+        jornadasPorFuncionario.get(funcionario.id) ?? [],
+        novaJornada
+      );
+
     if (
-      horas <= 0
+      horas <= 0 ||
+      !respeitaRegrasObrigatorias
     ) {
       if (diaAntigoTrocado !== null) {
         const chaveAntiga =
@@ -1613,19 +1809,6 @@ export async function gerarEscalaAutomatica(
       return false;
     }
 
-    const inicio =
-      Math.max(
-        horario.abertura,
-        Math.min(
-          horario.inicioPeriodo,
-          horario.fechamento -
-            (
-              horas * 60 +
-              funcionario.pausaAlmocoMinutos
-            )
-        )
-      );
-
     novosTurnos.push({
       restaurante_id:
         gerente.restauranteId,
@@ -1667,6 +1850,9 @@ export async function gerarEscalaAutomatica(
       )
       ?.add(dia);
 
+    jornadasPorFuncionario.get(funcionario.id)?.push(novaJornada);
+    diasComJornadaPorFuncionario.get(funcionario.id)?.add(dia);
+
     horasRestantes.set(
       funcionario.id,
       Math.max(
@@ -1687,6 +1873,19 @@ export async function gerarEscalaAutomatica(
         ) ?? 0
       ) + 1
     );
+
+    if (funcaoObrigatoria) {
+      const chaveFuncao = chaveCoberturaFuncao(
+        zonaId,
+        dia,
+        periodo,
+        funcaoObrigatoria
+      );
+      coberturaFuncaoNova.set(
+        chaveFuncao,
+        (coberturaFuncaoNova.get(chaveFuncao) ?? 0) + 1
+      );
+    }
 
     return true;
   };
@@ -1885,11 +2084,18 @@ export async function gerarEscalaAutomatica(
     dia: number,
     periodo: Periodo,
     respeitarPreferencia: boolean,
-    permitirDiaNaoPlanejado = false
+    permitirDiaNaoPlanejado = false,
+    funcaoObrigatoria?: string
   ) =>
     funcionarios
       .filter(
         (funcionario) => {
+          if (
+            funcaoObrigatoria &&
+            !funcionarioAtendeFuncao(funcionario.cargo, funcaoObrigatoria)
+          ) {
+            return false;
+          }
           if (
             usaZonas &&
             funcionario.zonaId !==
@@ -2010,10 +2216,36 @@ export async function gerarEscalaAutomatica(
             return false;
           }
 
-          return !!horarioDoTurno(
-            funcionario,
-            dia,
-            periodo
+          const horario = horarioDoTurno(funcionario, dia, periodo);
+          const horas = horasPlanejadas(funcionario, dia, periodo);
+
+          if (!horario || horas <= 0) return false;
+
+          const inicio = Math.max(
+            horario.abertura,
+            Math.min(
+              horario.inicioPeriodo,
+              horario.fechamento - (horas * 60 + funcionario.pausaAlmocoMinutos)
+            )
+          );
+          const jornada = {
+            inicio: dia * 24 * 60 + inicio,
+            fim:
+              dia * 24 * 60 +
+              inicio +
+              horas * 60 +
+              funcionario.pausaAlmocoMinutos,
+          };
+
+          return (
+            respeitaMaximoDiasConsecutivos(
+              diasComJornadaPorFuncionario.get(funcionario.id) ?? [],
+              dia
+            ) &&
+            respeitaDescansoMinimo(
+              jornadasPorFuncionario.get(funcionario.id) ?? [],
+              jornada
+            )
           );
         }
       )
@@ -2031,7 +2263,7 @@ export async function gerarEscalaAutomatica(
             let score = preferencias.includes(
               periodo
             )
-              ? 100
+              ? 30
               : 0;
 
             const linhas =
@@ -2061,15 +2293,29 @@ export async function gerarEscalaAutomatica(
                 funcionario.id
               ) ?? 0) * 0.01;
 
+            const metricas = metricasHistoricas.get(funcionario.id);
+            if (metricas) {
+              score += pontuarJusticaHistorica(
+                metricas,
+                funcionario.cargaHorariaSemanalMax,
+                referenciasJustica,
+                dia,
+                periodo
+              );
+            }
+
             return score;
           };
 
           return (
             scoreFuncionario(b) -
               scoreFuncionario(a) ||
-            a.id.localeCompare(
-              b.id
-            )
+            desempateSemanal(
+              `${escala.semana_inicio}:${b.id}:${dia}:${periodo}:${zonaId ?? "sem-zona"}`
+            ) -
+              desempateSemanal(
+                `${escala.semana_inicio}:${a.id}:${dia}:${periodo}:${zonaId ?? "sem-zona"}`
+              )
           );
         }
       )[0];
@@ -2196,6 +2442,49 @@ export async function gerarEscalaAutomatica(
             dia,
             periodo
           );
+
+        const minimosPorFuncao = agruparMinimosPorFuncao(
+          linhasNecessidadeDoSlot(zonaId, dia, periodo)
+        );
+
+        for (const [funcao, minimo] of minimosPorFuncao) {
+          const chaveFuncao = chaveCoberturaFuncao(zonaId, dia, periodo, funcao);
+          let faltamFuncao = Math.max(
+            0,
+            minimo - (coberturaFuncaoNova.get(chaveFuncao) ?? 0)
+          );
+
+          for (const respeitarPreferencia of [true, false]) {
+            while (faltamFuncao > 0) {
+              const candidato = escolherFuncionario(
+                zonaId,
+                dia,
+                periodo,
+                respeitarPreferencia,
+                true,
+                funcao
+              );
+
+              if (!candidato) break;
+
+              const alocado = alocar(
+                candidato,
+                zonaId,
+                dia,
+                periodo,
+                !periodosPreferidos(candidato.id, dia).includes(periodo),
+                funcao
+              );
+
+              if (!alocado) break;
+              faltamFuncao--;
+            }
+
+            if (faltamFuncao <= 0) break;
+          }
+
+          vagasSemCandidato += faltamFuncao;
+        }
 
         let faltam =
           Math.max(
