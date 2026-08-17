@@ -20,7 +20,7 @@ function getErrorMessage(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
   if (typeof error === "object" && "message" in error) {
-    return String((error as any).message);
+    return String(error.message);
   }
   return "Erro desconhecido";
 }
@@ -110,7 +110,10 @@ export async function salvarFuncionario(
       formData.get("folgasObrigatorias") ?? 2
     );
 
-    const valorHoraRaw = String(formData.get("valorHora") ?? "");
+    const valorHoraRaw = String(formData.get("valorHora") ?? "").trim();
+    const valorHora = valorHoraRaw
+      ? Number(valorHoraRaw.replace(",", "."))
+      : null;
 
     const frequenciaPagamento =
       String(formData.get("frequenciaPagamento") ?? "") || null;
@@ -128,7 +131,10 @@ export async function salvarFuncionario(
       };
     }
 
-    if (valorHoraRaw && Number(valorHoraRaw) < 0) {
+    if (
+      valorHora !== null &&
+      (!Number.isFinite(valorHora) || valorHora < 0)
+    ) {
       return {
         erro: "O valor/hora não pode ser negativo.",
       };
@@ -208,7 +214,7 @@ export async function salvarFuncionario(
       genero,
       carga_horaria_semanal_max: cargaHorariaSemanalMax,
       folgas_obrigatorias_semana: folgasObrigatorias,
-      valor_hora: valorHoraRaw ? Number(valorHoraRaw) : null,
+      valor_hora: valorHora,
       frequencia_pagamento: frequenciaPagamento,
       pausa_almoco_minutos: pausaAlmocoMinutos,
       eh_gerencia: ehGerencia,

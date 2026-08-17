@@ -22,7 +22,8 @@ export async function registrarRestaurante(
 
   // Passo 2
   const totalFuncionarios = Number(formData.get("totalFuncionarios") ?? 10);
-  const valorHoraPadrao = Number(formData.get("valorHoraPadrao") ?? 0);
+  const valorHoraPadraoRaw = String(formData.get("valorHoraPadrao") ?? "").trim();
+  const valorHoraPadrao = Number(valorHoraPadraoRaw.replace(",", "."));
 
   // Passo 3
   const frequenciaPagamentoPadrao = String(formData.get("frequenciaPagamentoPadrao") ?? "mes");
@@ -30,7 +31,7 @@ export async function registrarRestaurante(
   if (!nomeGerente || !email || senha.length < 8 || !nomeRestaurante) {
     return { erro: "Preencha todos os campos do passo 1 (senha com no mínimo 8 caracteres)." };
   }
-  if (valorHoraPadrao <= 0) {
+  if (!valorHoraPadraoRaw || !Number.isFinite(valorHoraPadrao) || valorHoraPadrao < 0) {
     return { erro: "Informe um valor/hora padrão válido." };
   }
 

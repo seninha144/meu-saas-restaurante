@@ -543,8 +543,8 @@ export function OnboardingForm({
                   key={linha._id}
                   className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4"
                 >
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                    <Campo label="Dia">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-6 lg:grid-cols-12">
+                    <Campo label="Dia" className="sm:col-span-3 lg:col-span-2">
                       <select
                         value={linha.diaSemana}
                         onChange={(e) =>
@@ -565,7 +565,7 @@ export function OnboardingForm({
                       </select>
                     </Campo>
 
-                    <Campo label="Período">
+                    <Campo label="Período" className="sm:col-span-3 lg:col-span-2">
                       <select
                         value={linha.periodo}
                         onChange={(e) =>
@@ -586,7 +586,7 @@ export function OnboardingForm({
                       </select>
                     </Campo>
 
-                    <Campo label="Zona">
+                    <Campo label="Zona" className="sm:col-span-3 lg:col-span-2">
                       <select
                         value={linha.zonaId}
                         onChange={(e) =>
@@ -608,7 +608,7 @@ export function OnboardingForm({
                       </select>
                     </Campo>
 
-                    <Campo label="Função">
+                    <Campo label="Função" className="sm:col-span-3 lg:col-span-2">
                       <input
                         list={datalistId}
                         value={linha.funcao}
@@ -624,7 +624,7 @@ export function OnboardingForm({
                       />
                     </Campo>
 
-                    <Campo label="Mín. / Ideal / Máx.">
+                    <Campo label="Mín. / Ideal / Máx." className="col-span-2 sm:col-span-5 lg:col-span-3">
                       <div className="flex gap-1">
                         <input
                           type="number"
@@ -668,7 +668,7 @@ export function OnboardingForm({
                       </div>
                     </Campo>
 
-                    <div className="flex items-end justify-end">
+                    <div className="col-span-2 flex items-end justify-end sm:col-span-1">
                       <button
                         type="button"
                         onClick={() => removerLinhaNecessidade(linha._id)}
@@ -746,12 +746,14 @@ const estiloInput =
 function Campo({
   label,
   children,
+  className,
 }: {
   label: string;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div>
+    <div className={className}>
       <label className="mb-1 block text-[10px] uppercase tracking-wide text-white/30">
         {label}
       </label>
