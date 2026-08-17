@@ -171,6 +171,8 @@ export interface Funcionario {
   valorHora: number | null;
   frequenciaPagamento: FrequenciaPagamento | null;
   pausaAlmocoMinutos: number;
+  podeAbertura: boolean;
+  podeFechamento: boolean;
   ehGerencia: boolean;
 }
 

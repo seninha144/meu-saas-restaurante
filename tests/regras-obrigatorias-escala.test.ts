@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agruparMinimosPorFuncao,
+  calcularJornadaOperacional,
   funcionarioAtendeFuncao,
+  obterFalhasNasExtremidades,
+  podeAssumirResponsabilidade,
   pontuarCoberturaDia,
   respeitaDescansoMinimo,
   respeitaMaximoDiasConsecutivos,
@@ -53,4 +56,57 @@ test("cobertura abaixo do mínimo prevalece sobre ajustes históricos", () => {
   const diaAbaixoDoMinimo = pontuarCoberturaDia(2, 3, 4) - 50;
   const diaCobertoComVantagemHistorica = pontuarCoberturaDia(3, 3, 4) + 50;
   assert.ok(diaAbaixoDoMinimo > diaCobertoComVantagemHistorica);
+});
+
+test("ancora responsáveis na abertura e no fechamento real", () => {
+  assert.deepEqual(
+    calcularJornadaOperacional(9 * 60, 23 * 60, 12 * 60, 8 * 60, "abertura"),
+    { inicio: 9 * 60, fim: 17 * 60 }
+  );
+  assert.deepEqual(
+    calcularJornadaOperacional(9 * 60, 23 * 60, 17 * 60, 8 * 60, "fechamento"),
+    { inicio: 15 * 60, fim: 23 * 60 }
+  );
+});
+
+test("fechamento após meia-noite termina no horário real", () => {
+  assert.deepEqual(
+    calcularJornadaOperacional(18 * 60, 25 * 60, 22 * 60, 6 * 60, "fechamento"),
+    { inicio: 19 * 60, fim: 25 * 60 }
+  );
+});
+
+test("funcionário não apto não cobre fechamento e gera falha", () => {
+  assert.equal(podeAssumirResponsabilidade(true, false, "fechamento"), false);
+  assert.deepEqual(
+    obterFalhasNasExtremidades(
+      [{
+        periodo: "Fechamento",
+        horaInicio: "12:00",
+        horaFim: "23:00",
+        podeAbertura: true,
+        podeFechamento: false,
+      }],
+      "09:00",
+      "23:00"
+    ),
+    ["abertura", "fechamento"]
+  );
+});
+
+test("um responsável basta quando o mínimo da abertura é um", () => {
+  assert.deepEqual(
+    obterFalhasNasExtremidades(
+      [{
+        periodo: "Manhã",
+        horaInicio: "09:00",
+        horaFim: "17:00",
+        podeAbertura: true,
+        podeFechamento: false,
+      }],
+      "09:00",
+      "23:00"
+    ),
+    ["fechamento"]
+  );
 });

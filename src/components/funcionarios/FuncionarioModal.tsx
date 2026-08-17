@@ -224,6 +224,34 @@ export function FuncionarioModal({
                 — aparece na aba "Gerência" da grade, separado da equipe geral
               </span>
             </label>
+
+            <div className="col-span-2 grid gap-2 sm:grid-cols-2">
+              <label className="flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  name="podeAbertura"
+                  defaultChecked={funcionario?.podeAbertura ?? true}
+                  className="mt-0.5 accent-[#3EC6B9]"
+                />
+                <span>
+                  <span className="block text-sm">Pode realizar abertura</span>
+                  <span className="text-xs text-white/30">Responsável apto a iniciar a operação</span>
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  name="podeFechamento"
+                  defaultChecked={funcionario?.podeFechamento ?? true}
+                  className="mt-0.5 accent-[#E8A33D]"
+                />
+                <span>
+                  <span className="block text-sm">Pode realizar fechamento</span>
+                  <span className="text-xs text-white/30">Responsável apto a encerrar a operação</span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <div>

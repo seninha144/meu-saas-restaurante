@@ -120,6 +120,8 @@ export type Database = {
           modalidade_pagamento: string
           nome: string
           pausa_almoco_minutos: number
+          pode_abertura: boolean
+          pode_fechamento: boolean
           restaurante_id: string
           tipo_contrato: string
           usuario_id: string | null
@@ -142,6 +144,8 @@ export type Database = {
           modalidade_pagamento: string
           nome: string
           pausa_almoco_minutos?: number
+          pode_abertura?: boolean
+          pode_fechamento?: boolean
           restaurante_id: string
           tipo_contrato: string
           usuario_id?: string | null
@@ -164,6 +168,8 @@ export type Database = {
           modalidade_pagamento?: string
           nome?: string
           pausa_almoco_minutos?: number
+          pode_abertura?: boolean
+          pode_fechamento?: boolean
           restaurante_id?: string
           tipo_contrato?: string
           usuario_id?: string | null

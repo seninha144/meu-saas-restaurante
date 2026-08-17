@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useId, useMemo, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Clock3, Copy, Plus, X } from "lucide-react";
 import {
   salvarConfiguracaoOperacional,
   type OnboardingState,
@@ -103,6 +103,16 @@ export function OnboardingForm({
     })
   );
 
+  const [horarios, setHorarios] = useState(() =>
+    Array.from({ length: 7 }, (_, dia) => {
+      const existente = horariosExistentes.find((h) => h.diaSemana === dia);
+      return {
+        abertura: existente?.horaAbertura ?? "",
+        fechamento: existente?.horaFechamento ?? "",
+      };
+    })
+  );
+
   const [movimento, setMovimento] = useState<
     Map<string, NivelMovimento>
   >(
@@ -185,6 +195,27 @@ export function OnboardingForm({
 
   function removerLinhaNecessidade(id: string) {
     setNecessidades((atual) => atual.filter((linha) => linha._id !== id));
+  }
+
+  function atualizarHorario(
+    dia: number,
+    campo: "abertura" | "fechamento",
+    valor: string
+  ) {
+    setHorarios((atual) =>
+      atual.map((horario, index) =>
+        index === dia ? { ...horario, [campo]: valor } : horario
+      )
+    );
+  }
+
+  function aplicarHorarioAosDiasAbertos(diaOrigem: number) {
+    const horarioOrigem = horarios[diaOrigem];
+    setHorarios((atual) =>
+      atual.map((horario, dia) =>
+        diasAbertos[dia] ? { ...horarioOrigem } : horario
+      )
+    );
   }
 
   /*
@@ -315,77 +346,100 @@ export function OnboardingForm({
               </p>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {DIAS.map((dia, index) => {
-                const existente = horariosExistentes.find(
-                  (h) => h.diaSemana === index
-                );
+                const aberto = diasAbertos[index];
+                const horario = horarios[index];
+                const fechaNoDiaSeguinte =
+                  aberto &&
+                  Boolean(horario.abertura && horario.fechamento) &&
+                  horario.fechamento <= horario.abertura;
 
                 return (
                   <div
                     key={dia}
-                    className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4"
+                    className={`rounded-xl border p-4 transition ${
+                      aberto
+                        ? "border-white/[0.07] bg-white/[0.025]"
+                        : "border-white/[0.04] bg-black/10"
+                    }`}
                   >
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                      <label className="flex min-w-[140px] items-center gap-3">
-                        <input
-                          type="checkbox"
-                          name={`aberto-${index}`}
-                          checked={diasAbertos[index]}
-                          onChange={(e) =>
-                            setDiasAbertos((atual) => {
-                              const proximo = [...atual];
-                              proximo[index] = e.target.checked;
-                              return proximo;
-                            })
-                          }
-                          className="h-4 w-4 accent-[#E8A33D]"
-                        />
-
-                        <span className="text-sm font-medium text-white">
-                          {dia}
-                        </span>
-                      </label>
-
-                      <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
-                        <div>
-                          <label
-                            htmlFor={`abertura-${index}`}
-                            className="mb-1.5 block text-[11px] uppercase tracking-wide text-white/30"
-                          >
-                            Abertura
-                          </label>
-
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+                      <div className="flex min-w-[150px] items-center justify-between gap-3 lg:justify-start">
+                        <label className="flex cursor-pointer items-center gap-3">
                           <input
+                            type="checkbox"
+                            name={`aberto-${index}`}
+                            checked={aberto}
+                            onChange={(e) =>
+                              setDiasAbertos((atual) => {
+                                const proximo = [...atual];
+                                proximo[index] = e.target.checked;
+                                return proximo;
+                              })
+                            }
+                            className="h-4 w-4 accent-[#E8A33D]"
+                          />
+
+                          <span className={`text-sm font-medium ${aberto ? "text-white" : "text-white/35"}`}>
+                            {dia}
+                          </span>
+                        </label>
+
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          aberto
+                            ? "bg-[#3EC6B9]/10 text-[#3EC6B9]"
+                            : "bg-white/[0.04] text-white/25"
+                        }`}>
+                          {aberto ? "Aberto" : "Fechado"}
+                        </span>
+                      </div>
+
+                      <div className={`flex-1 ${aberto ? "" : "pointer-events-none opacity-30"}`}>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-end">
+                          <CampoHorario
                             id={`abertura-${index}`}
-                            type="time"
                             name={`abertura-${index}`}
-                            defaultValue={existente?.horaAbertura ?? ""}
-                            disabled={!diasAbertos[index]}
-                            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-[#E8A33D]/50 disabled:opacity-30"
+                            label="Abertura"
+                            value={horario.abertura}
+                            disabled={!aberto}
+                            onChange={(valor) => atualizarHorario(index, "abertura", valor)}
+                          />
+
+                          <span className="hidden pb-2.5 text-xs text-white/20 sm:block">até</span>
+
+                          <CampoHorario
+                            id={`fechamento-${index}`}
+                            name={`fechamento-${index}`}
+                            label="Fechamento"
+                            value={horario.fechamento}
+                            disabled={!aberto}
+                            onChange={(valor) => atualizarHorario(index, "fechamento", valor)}
                           />
                         </div>
 
-                        <span className="hidden text-xs text-white/25 sm:block">
-                          até
-                        </span>
+                        <div className="mt-2 flex min-h-6 flex-wrap items-center justify-between gap-2">
+                          <span className={`flex items-center gap-1.5 text-[11px] ${
+                            fechaNoDiaSeguinte ? "text-[#E8A33D]" : "text-white/25"
+                          }`}>
+                            <Clock3 className="h-3 w-3" />
+                            {fechaNoDiaSeguinte
+                              ? "Fecha no dia seguinte"
+                              : horario.abertura && horario.fechamento
+                                ? `${horario.abertura} → ${horario.fechamento}`
+                                : "Defina o horário"}
+                          </span>
 
-                        <div>
-                          <label
-                            htmlFor={`fechamento-${index}`}
-                            className="mb-1.5 block text-[11px] uppercase tracking-wide text-white/30"
-                          >
-                            Fechamento
-                          </label>
-
-                          <input
-                            id={`fechamento-${index}`}
-                            type="time"
-                            name={`fechamento-${index}`}
-                            defaultValue={existente?.horaFechamento ?? ""}
-                            disabled={!diasAbertos[index]}
-                            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-[#E8A33D]/50 disabled:opacity-30"
-                          />
+                          {horario.abertura && horario.fechamento && (
+                            <button
+                              type="button"
+                              onClick={() => aplicarHorarioAosDiasAbertos(index)}
+                              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium text-white/35 transition hover:bg-white/[0.05] hover:text-white/65"
+                            >
+                              <Copy className="h-3 w-3" />
+                              Aplicar aos dias abertos
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -742,6 +796,57 @@ export function OnboardingForm({
 
 const estiloInput =
   "w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-[#E8A33D]/50";
+
+function CampoHorario({
+  id,
+  name,
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  value: string;
+  disabled: boolean;
+  onChange: (valor: string) => void;
+}) {
+  function formatarDigitacao(valor: string) {
+    const digitos = valor.replace(/\D/g, "").slice(0, 4);
+    return digitos.length > 2
+      ? `${digitos.slice(0, 2)}:${digitos.slice(2)}`
+      : digitos;
+  }
+
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="mb-1.5 block text-[11px] uppercase tracking-wide text-white/30"
+      >
+        {label}
+      </label>
+      <div className="relative">
+        <Clock3 className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/25" />
+        <input
+          id={id}
+          name={name}
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          placeholder="HH:mm"
+          pattern="([01][0-9]|2[0-3]):[0-5][0-9]"
+          title="Use um horário entre 00:00 e 23:59"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(formatarDigitacao(e.target.value))}
+          className="w-full rounded-lg border border-white/10 bg-[#11151b] py-2 pl-9 pr-3 font-mono text-sm tabular-nums text-white outline-none transition placeholder:text-white/20 focus:border-[#E8A33D]/50"
+        />
+      </div>
+    </div>
+  );
+}
 
 function Campo({
   label,

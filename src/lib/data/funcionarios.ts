@@ -49,7 +49,7 @@ export async function getFuncionarios(
   } = await supabase
     .from("funcionarios")
     .select(
-      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento, pausa_almoco_minutos, eh_gerencia"
+      "id, restaurante_id, nome, cargo, zona_id, idade, genero, carga_horaria_semanal_max, folgas_obrigatorias_semana, ativo, valor_hora, frequencia_pagamento, pausa_almoco_minutos, pode_abertura, pode_fechamento, eh_gerencia"
     )
     .eq("restaurante_id", restauranteId)
     .eq("ativo", true);
@@ -186,6 +186,8 @@ export async function getFuncionarios(
           | null,
       pausaAlmocoMinutos:
         f.pausa_almoco_minutos ?? 30,
+      podeAbertura: f.pode_abertura ?? true,
+      podeFechamento: f.pode_fechamento ?? true,
       ehGerencia:
         f.eh_gerencia ?? false,
     };

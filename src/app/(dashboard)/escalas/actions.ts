@@ -10,12 +10,15 @@ import {
 } from "@/lib/horas";
 import {
   agruparMinimosPorFuncao,
+  calcularJornadaOperacional,
   funcionarioAtendeFuncao,
   normalizarFuncao,
+  podeAssumirResponsabilidade,
   pontuarCoberturaDia,
   respeitaDescansoMinimo,
   respeitaMaximoDiasConsecutivos,
   type JornadaAbsoluta,
+  type ResponsabilidadeOperacional,
 } from "@/lib/escalas/regras-obrigatorias";
 import {
   agregarHistoricoTurnos,
@@ -53,6 +56,8 @@ interface PerfilFuncionario {
   cargaHorariaSemanalMax: number;
   pausaAlmocoMinutos: number;
   diasTrabalhoAlvo: number;
+  podeAbertura: boolean;
+  podeFechamento: boolean;
 }
 
 type PeriodoOperacional =
@@ -432,7 +437,7 @@ export async function gerarEscalaAutomatica(
     supabase
       .from("funcionarios")
       .select(
-        "id, cargo, zona_id, carga_horaria_semanal_max, folgas_obrigatorias_semana, pausa_almoco_minutos"
+        "id, cargo, zona_id, carga_horaria_semanal_max, folgas_obrigatorias_semana, pausa_almoco_minutos, pode_abertura, pode_fechamento"
       )
       .eq(
         "restaurante_id",
@@ -538,6 +543,12 @@ export async function gerarEscalaAutomatica(
         pausaAlmocoMinutos:
           funcionario.pausa_almoco_minutos ??
           30,
+
+        podeAbertura:
+          funcionario.pode_abertura ?? true,
+
+        podeFechamento:
+          funcionario.pode_fechamento ?? true,
 
         diasTrabalhoAlvo:
           Math.max(
@@ -694,6 +705,12 @@ export async function gerarEscalaAutomatica(
       number
     >();
 
+  const extremidadesCobertas = new Set<string>();
+  const chaveExtremidade = (
+    dia: number,
+    responsabilidade: ResponsabilidadeOperacional
+  ) => `${dia}:${responsabilidade}`;
+
   const jornadasPorFuncionario = new Map<string, JornadaAbsoluta[]>(
     funcionarios.map((funcionario) => [funcionario.id, []])
   );
@@ -784,6 +801,24 @@ export async function gerarEscalaAutomatica(
             horas
         )
       );
+
+      const horarioDia = horariosPorDia.get(turno.dia_semana);
+      const inicioTurno = turno.hora_inicio?.slice(0, 5);
+      const fimTurno = turno.hora_fim?.slice(0, 5);
+      if (
+        funcionario.podeAbertura &&
+        turno.periodo === "Manhã" &&
+        inicioTurno === horarioDia?.abertura
+      ) {
+        extremidadesCobertas.add(chaveExtremidade(turno.dia_semana, "abertura"));
+      }
+      if (
+        funcionario.podeFechamento &&
+        turno.periodo === "Fechamento" &&
+        fimTurno === horarioDia?.fechamento
+      ) {
+        extremidadesCobertas.add(chaveExtremidade(turno.dia_semana, "fechamento"));
+      }
     }
 
     const chaveCobertura =
@@ -1567,7 +1602,8 @@ export async function gerarEscalaAutomatica(
     dia: number,
     periodo: Periodo,
     foraPreferencia: boolean,
-    funcaoObrigatoria?: string
+    funcaoObrigatoria?: string,
+    responsabilidade?: ResponsabilidadeOperacional
   ) => {
     const horario =
       horarioDoTurno(
@@ -1640,20 +1676,16 @@ export async function gerarEscalaAutomatica(
         periodo
       );
 
-    const inicio = Math.max(
+    const jornadaRelativa = calcularJornadaOperacional(
       horario.abertura,
-      Math.min(
-        horario.inicioPeriodo,
-        horario.fechamento - (horas * 60 + funcionario.pausaAlmocoMinutos)
-      )
+      horario.fechamento,
+      horario.inicioPeriodo,
+      horas * 60 + funcionario.pausaAlmocoMinutos,
+      responsabilidade
     );
     const novaJornada = {
-      inicio: dia * 24 * 60 + inicio,
-      fim:
-        dia * 24 * 60 +
-        inicio +
-        horas * 60 +
-        funcionario.pausaAlmocoMinutos,
+      inicio: dia * 24 * 60 + jornadaRelativa.inicio,
+      fim: dia * 24 * 60 + jornadaRelativa.fim,
     };
     const respeitaRegrasObrigatorias =
       respeitaMaximoDiasConsecutivos(
@@ -1748,7 +1780,8 @@ export async function gerarEscalaAutomatica(
 
     if (
       coberturaAtual >=
-      necessidade.maximo
+        necessidade.maximo &&
+      !responsabilidade
     ) {
       if (diaAntigoTrocado !== null) {
         const chaveAntiga =
@@ -1828,13 +1861,11 @@ export async function gerarEscalaAutomatica(
       periodo,
 
       hora_inicio:
-        formatarHoraDoDia(inicio),
+        formatarHoraDoDia(jornadaRelativa.inicio),
 
       hora_fim:
         formatarHoraDoDia(
-          inicio +
-            horas * 60 +
-            funcionario.pausaAlmocoMinutos
+          jornadaRelativa.fim
         ),
 
       fora_preferencia:
@@ -1885,6 +1916,10 @@ export async function gerarEscalaAutomatica(
         chaveFuncao,
         (coberturaFuncaoNova.get(chaveFuncao) ?? 0) + 1
       );
+    }
+
+    if (responsabilidade) {
+      extremidadesCobertas.add(chaveExtremidade(dia, responsabilidade));
     }
 
     return true;
@@ -2085,11 +2120,22 @@ export async function gerarEscalaAutomatica(
     periodo: Periodo,
     respeitarPreferencia: boolean,
     permitirDiaNaoPlanejado = false,
-    funcaoObrigatoria?: string
+    funcaoObrigatoria?: string,
+    responsabilidade?: ResponsabilidadeOperacional
   ) =>
     funcionarios
       .filter(
         (funcionario) => {
+          if (
+            responsabilidade &&
+            !podeAssumirResponsabilidade(
+              funcionario.podeAbertura,
+              funcionario.podeFechamento,
+              responsabilidade
+            )
+          ) {
+            return false;
+          }
           if (
             funcaoObrigatoria &&
             !funcionarioAtendeFuncao(funcionario.cargo, funcaoObrigatoria)
@@ -2194,7 +2240,8 @@ export async function gerarEscalaAutomatica(
 
           if (
             coberturaAtual >=
-            necessidade.maximo
+              necessidade.maximo &&
+            !responsabilidade
           ) {
             return false;
           }
@@ -2221,20 +2268,16 @@ export async function gerarEscalaAutomatica(
 
           if (!horario || horas <= 0) return false;
 
-          const inicio = Math.max(
+          const jornadaRelativa = calcularJornadaOperacional(
             horario.abertura,
-            Math.min(
-              horario.inicioPeriodo,
-              horario.fechamento - (horas * 60 + funcionario.pausaAlmocoMinutos)
-            )
+            horario.fechamento,
+            horario.inicioPeriodo,
+            horas * 60 + funcionario.pausaAlmocoMinutos,
+            responsabilidade
           );
           const jornada = {
-            inicio: dia * 24 * 60 + inicio,
-            fim:
-              dia * 24 * 60 +
-              inicio +
-              horas * 60 +
-              funcionario.pausaAlmocoMinutos,
+            inicio: dia * 24 * 60 + jornadaRelativa.inicio,
+            fim: dia * 24 * 60 + jornadaRelativa.fim,
           };
 
           return (
@@ -2389,6 +2432,75 @@ export async function gerarEscalaAutomatica(
         return a - b;
       }
     );
+
+  /*
+   * ==========================================================
+   * COBERTURA DAS EXTREMIDADES DA OPERAÇÃO
+   * ==========================================================
+   * Uma pessoa apta inicia a abertura e outra encerra o
+   * fechamento. Estes turnos também contam para os mínimos
+   * normais dos respectivos períodos.
+   */
+  for (const dia of diasOrdenados) {
+    for (const responsabilidade of [
+      "abertura",
+      "fechamento",
+    ] as ResponsabilidadeOperacional[]) {
+      if (extremidadesCobertas.has(chaveExtremidade(dia, responsabilidade))) {
+        continue;
+      }
+
+      const periodo: Periodo =
+        responsabilidade === "abertura" ? "Manhã" : "Fechamento";
+      let coberta = false;
+
+      for (const zona of usaZonas ? zonas : [null]) {
+        const zonaId = zona?.id ?? null;
+        const funcaoPendente = [...agruparMinimosPorFuncao(
+          linhasNecessidadeDoSlot(zonaId, dia, periodo)
+        )].find(
+          ([funcao, minimo]) =>
+            (coberturaFuncaoNova.get(
+              chaveCoberturaFuncao(zonaId, dia, periodo, funcao)
+            ) ?? 0) < minimo
+        )?.[0];
+
+        for (const funcaoObrigatoria of funcaoPendente
+          ? [funcaoPendente, undefined]
+          : [undefined]) {
+          for (const respeitarPreferencia of [true, false]) {
+            const candidato = escolherFuncionario(
+              zonaId,
+              dia,
+              periodo,
+              respeitarPreferencia,
+              true,
+              funcaoObrigatoria,
+              responsabilidade
+            );
+
+            if (!candidato) continue;
+
+            coberta = alocar(
+              candidato,
+              zonaId,
+              dia,
+              periodo,
+              !periodosPreferidos(candidato.id, dia).includes(periodo),
+              funcaoObrigatoria,
+              responsabilidade
+            );
+
+            if (coberta) break;
+          }
+          if (coberta) break;
+        }
+        if (coberta) break;
+      }
+
+      if (!coberta) vagasSemCandidato++;
+    }
+  }
 
   /*
    * ==========================================================

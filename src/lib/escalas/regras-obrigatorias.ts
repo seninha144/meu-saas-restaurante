@@ -7,6 +7,74 @@ export interface JornadaAbsoluta {
   fim: number;
 }
 
+export type ResponsabilidadeOperacional = "abertura" | "fechamento";
+
+export function podeAssumirResponsabilidade(
+  podeAbertura: boolean,
+  podeFechamento: boolean,
+  responsabilidade: ResponsabilidadeOperacional
+): boolean {
+  return responsabilidade === "abertura" ? podeAbertura : podeFechamento;
+}
+
+export function obterFalhasNasExtremidades(
+  turnos: {
+    periodo: string;
+    horaInicio: string | null;
+    horaFim: string | null;
+    podeAbertura: boolean;
+    podeFechamento: boolean;
+  }[],
+  abertura: string,
+  fechamento: string
+): ResponsabilidadeOperacional[] {
+  const aberturaCoberta = turnos.some(
+    (turno) =>
+      turno.periodo === "Manhã" &&
+      turno.horaInicio?.slice(0, 5) === abertura.slice(0, 5) &&
+      turno.podeAbertura
+  );
+  const fechamentoCoberto = turnos.some(
+    (turno) =>
+      turno.periodo === "Fechamento" &&
+      turno.horaFim?.slice(0, 5) === fechamento.slice(0, 5) &&
+      turno.podeFechamento
+  );
+
+  return [
+    ...(aberturaCoberta ? [] : ["abertura" as const]),
+    ...(fechamentoCoberto ? [] : ["fechamento" as const]),
+  ];
+}
+
+export function calcularJornadaOperacional(
+  abertura: number,
+  fechamento: number,
+  inicioPeriodo: number,
+  duracaoMinutos: number,
+  responsabilidade?: ResponsabilidadeOperacional
+): JornadaAbsoluta {
+  if (responsabilidade === "abertura") {
+    return {
+      inicio: abertura,
+      fim: Math.min(fechamento, abertura + duracaoMinutos),
+    };
+  }
+
+  if (responsabilidade === "fechamento") {
+    return {
+      inicio: Math.max(abertura, fechamento - duracaoMinutos),
+      fim: fechamento,
+    };
+  }
+
+  const inicio = Math.max(
+    abertura,
+    Math.min(inicioPeriodo, fechamento - duracaoMinutos)
+  );
+  return { inicio, fim: inicio + duracaoMinutos };
+}
+
 export function respeitaDescansoMinimo(
   existentes: JornadaAbsoluta[],
   nova: JornadaAbsoluta,
