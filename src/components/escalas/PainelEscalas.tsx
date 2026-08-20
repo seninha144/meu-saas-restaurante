@@ -58,6 +58,7 @@ export function PainelEscalas({
         onAbrirNovoFuncionario={() => setModalFuncionario("novo")}
         onAbrirGestaoZonas={() => setModalZonas(true)}
         onEditarFuncionario={(f) => setModalFuncionario(f)}
+        offsetAtual={offsetAtual}
       />
 
       {modalFuncionario && (

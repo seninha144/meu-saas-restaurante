@@ -221,7 +221,7 @@ export function FuncionarioModal({
               <span className="text-sm">Faz parte da gerência</span>
 
               <span className="text-xs text-white/30">
-                — aparece na aba "Gerência" da grade, separado da equipe geral
+                — aparece na aba &quot;Gerência&quot; da grade, separado da equipe geral
               </span>
             </label>
 
@@ -252,6 +252,36 @@ export function FuncionarioModal({
                 </span>
               </label>
             </div>
+
+            <label className="col-span-2 flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+              <input
+                type="checkbox"
+                name="aceitaHorarioRepartido"
+                defaultChecked={funcionario?.aceitaHorarioRepartido ?? false}
+                className="mt-0.5 accent-[#E8A33D]"
+              />
+              <span>
+                <span className="block text-sm">Aceita horário repartido</span>
+                <span className="text-xs text-white/30">
+                  Poderá trabalhar em dois blocos no mesmo dia quando o futuro otimizador suportar esta opção
+                </span>
+              </span>
+            </label>
+
+            <label className="col-span-2 flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+              <input
+                type="checkbox"
+                name="aceitaHorasExtras"
+                defaultChecked={funcionario?.aceitaHorasExtras ?? false}
+                className="mt-0.5 accent-[#E8A33D]"
+              />
+              <span>
+                <span className="block text-sm">Aceita fazer horas extras?</span>
+                <span className="text-xs text-white/30">
+                  O gerador respeitará também o limite semanal definido pelo restaurante
+                </span>
+              </span>
+            </label>
           </div>
 
           <div>

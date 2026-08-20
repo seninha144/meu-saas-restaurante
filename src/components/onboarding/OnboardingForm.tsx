@@ -4,8 +4,14 @@ import { useActionState, useId, useMemo, useState } from "react";
 import { Clock3, Copy, Plus, X } from "lucide-react";
 import {
   salvarConfiguracaoOperacional,
-  type OnboardingState,
 } from "@/app/onboarding/actions";
+import {
+  paraNecessidadesPayload,
+  paraMovimentosPayload,
+  validarLinhasNecessidade,
+  type LinhaNecessidadeOperacional,
+  type PerfilOperacionalFormState,
+} from "@/lib/perfil-operacional/perfil-operacional";
 import type {
   HorarioFuncionamento,
   MovimentoOperacional,
@@ -30,7 +36,7 @@ const DIAS = [
   "Domingo",
 ];
 
-const estadoInicial: OnboardingState = {};
+const estadoInicial: PerfilOperacionalFormState = {};
 
 const CORES_NIVEL: Record<
   NivelMovimento,
@@ -58,40 +64,53 @@ function chaveMovimento(dia: number, periodo: PeriodoOperacional) {
   return `${dia}|${periodo}`;
 }
 
-interface LinhaNecessidade {
+interface LinhaNecessidade extends LinhaNecessidadeOperacional {
   _id: string;
-  diaSemana: number;
-  periodo: PeriodoOperacional;
-  zonaId: string;
-  funcao: string;
-  minimo: number;
-  ideal: number;
-  maximo: number;
 }
 
-interface OnboardingFormProps {
+interface DadosPerfilOperacionalProps {
   zonas: Zona[];
   cargosExistentes: string[];
   horariosExistentes: HorarioFuncionamento[];
   coberturaFdsExistente: boolean;
+  permiteHorarioRepartidoExistente: boolean;
+  permiteHorasExtrasExistente: boolean;
+  limiteHorasExtrasExistente: number;
   movimentosExistentes: MovimentoOperacional[];
   necessidadesExistentes: NecessidadeEquipe[];
 }
 
-export function OnboardingForm({
+interface PerfilOperacionalFormProps extends DadosPerfilOperacionalProps {
+  action: (
+    estado: PerfilOperacionalFormState,
+    formData: FormData
+  ) => Promise<PerfilOperacionalFormState>;
+  contexto: "onboarding" | "configuracoes";
+}
+
+export function PerfilOperacionalForm({
   zonas,
   cargosExistentes,
   horariosExistentes,
   coberturaFdsExistente,
+  permiteHorarioRepartidoExistente,
+  permiteHorasExtrasExistente,
+  limiteHorasExtrasExistente,
   movimentosExistentes,
   necessidadesExistentes,
-}: OnboardingFormProps) {
+  action,
+  contexto,
+}: PerfilOperacionalFormProps) {
   const [state, formAction, pending] = useActionState(
-    salvarConfiguracaoOperacional,
+    action,
     estadoInicial
   );
+  const emConfiguracoes = contexto === "configuracoes";
 
   const [erroLocal, setErroLocal] = useState<string | null>(null);
+  const [permiteHorasExtras, setPermiteHorasExtras] = useState(
+    permiteHorasExtrasExistente
+  );
   const datalistId = useId();
 
   const [diasAbertos, setDiasAbertos] = useState<boolean[]>(() =>
@@ -226,36 +245,23 @@ export function OnboardingForm({
    * pelo FormData tenha exatamente o formato esperado pela Action.
    */
   const movimentosPayload = useMemo(() => {
-    const payload: {
-      dia_semana: number;
-      periodo: PeriodoOperacional;
-      nivel: NivelMovimento;
-    }[] = [];
+    const movimentosAtuais: MovimentoOperacional[] = [];
 
     movimento.forEach((nivel, chave) => {
       const [diaTexto, periodo] = chave.split("|");
 
-      payload.push({
-        dia_semana: Number(diaTexto),
+      movimentosAtuais.push({
+        diaSemana: Number(diaTexto),
         periodo: periodo as PeriodoOperacional,
         nivel,
       });
     });
 
-    return payload;
+    return paraMovimentosPayload(movimentosAtuais);
   }, [movimento]);
 
   const necessidadesPayload = useMemo(
-    () =>
-      necessidades.map((linha) => ({
-        dia_semana: linha.diaSemana,
-        periodo: linha.periodo,
-        zona_id: linha.zonaId || null,
-        funcao: linha.funcao.trim() || null,
-        minimo: Number(linha.minimo),
-        ideal: Number(linha.ideal),
-        maximo: Number(linha.maximo),
-      })),
+    () => paraNecessidadesPayload(necessidades),
     [necessidades]
   );
 
@@ -264,39 +270,27 @@ export function OnboardingForm({
       return "Selecione pelo menos um dia de funcionamento.";
     }
 
-    for (const linha of necessidades) {
-      if (
-        !Number.isFinite(linha.minimo) ||
-        !Number.isFinite(linha.ideal) ||
-        !Number.isFinite(linha.maximo) ||
-        linha.minimo < 0 ||
-        linha.ideal < linha.minimo ||
-        linha.maximo < linha.ideal
-      ) {
-        return "Em Necessidade de equipa, confira se mínimo ≤ ideal ≤ máximo em todas as linhas.";
-      }
-    }
-
-    return null;
+    return validarLinhasNecessidade(necessidades);
   }
 
   return (
-    <main className="min-h-screen bg-[#0b0d10] px-4 py-10 text-[#f1f0ec]">
+    <main className={emConfiguracoes ? "text-[#f1f0ec]" : "min-h-screen bg-[#0b0d10] px-4 py-10 text-[#f1f0ec]"}>
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-8">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-white/40">
-            Configuração inicial
+            {emConfiguracoes ? "Perfil operacional" : "Configuração inicial"}
           </p>
 
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-            Configure o funcionamento do restaurante
+            {emConfiguracoes
+              ? "Funcionamento do restaurante"
+              : "Configure o funcionamento do restaurante"}
           </h1>
 
           <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
-            Estas informações definem a base operacional do restaurante.
-            O gerador de escalas vai usar este contexto para tomar
-            decisões mais inteligentes — mas por enquanto só estamos
-            recolhendo os dados.
+            {emConfiguracoes
+              ? "Atualize os dados usados como base nas próximas gerações de escala. Escalas já criadas não serão alteradas."
+              : "Estas informações definem a base operacional do restaurante. O gerador de escalas vai usar este contexto para tomar decisões mais inteligentes — mas por enquanto só estamos recolhendo os dados."}
           </p>
         </div>
 
@@ -481,6 +475,105 @@ export function OnboardingForm({
                 className="mt-1 h-4 w-4 shrink-0 accent-[#E8A33D]"
               />
             </label>
+          </section>
+
+          {/* HORÁRIO REPARTIDO */}
+          <section className="rounded-2xl border border-white/[0.06] bg-white/[0.03] p-6">
+            <div className="mb-4">
+              <h2 className="text-base font-semibold text-white">
+                Horário repartido
+              </h2>
+              <p className="mt-1 text-sm leading-5 text-white/40">
+                Este dado prepara futuras otimizações e ainda não altera a geração atual.
+              </p>
+            </div>
+
+            <fieldset>
+              <legend className="text-sm font-medium text-white">
+                Este restaurante utiliza horários repartidos?
+              </legend>
+              <div className="mt-3 flex gap-5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="radio"
+                    name="permiteHorarioRepartido"
+                    value="true"
+                    defaultChecked={permiteHorarioRepartidoExistente}
+                    className="accent-[#E8A33D]"
+                  />
+                  Sim
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="radio"
+                    name="permiteHorarioRepartido"
+                    value="false"
+                    defaultChecked={!permiteHorarioRepartidoExistente}
+                    className="accent-[#E8A33D]"
+                  />
+                  Não
+                </label>
+              </div>
+            </fieldset>
+          </section>
+
+          {/* HORAS EXTRAS */}
+          <section className="rounded-2xl border border-white/[0.06] bg-white/[0.03] p-6">
+            <div className="mb-4">
+              <h2 className="text-base font-semibold text-white">Horas extras automáticas</h2>
+              <p className="mt-1 text-sm leading-5 text-white/40">
+                Define o teto adicional que o gerador automático poderá usar por funcionário.
+              </p>
+            </div>
+
+            <fieldset>
+              <legend className="text-sm font-medium text-white">
+                Permitir horas extras na escala automática?
+              </legend>
+              <div className="mt-3 flex gap-5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="radio"
+                    name="permiteHorasExtras"
+                    value="true"
+                    checked={permiteHorasExtras}
+                    onChange={() => setPermiteHorasExtras(true)}
+                    className="accent-[#E8A33D]"
+                  />
+                  Sim
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="radio"
+                    name="permiteHorasExtras"
+                    value="false"
+                    checked={!permiteHorasExtras}
+                    onChange={() => setPermiteHorasExtras(false)}
+                    className="accent-[#E8A33D]"
+                  />
+                  Não
+                </label>
+              </div>
+            </fieldset>
+
+            <div className={`mt-4 ${permiteHorasExtras ? "" : "opacity-40"}`}>
+              <label className="mb-1.5 block text-xs font-medium text-white/50">
+                Limite semanal por funcionário
+              </label>
+              <select
+                name="limiteHorasExtrasSemanais"
+                defaultValue={
+                  limiteHorasExtrasExistente === 1 || limiteHorasExtrasExistente === 2
+                    ? limiteHorasExtrasExistente
+                    : 1
+                }
+                disabled={!permiteHorasExtras}
+                className="w-full max-w-xs rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#E8A33D]/50 disabled:cursor-not-allowed"
+              >
+                <option value={1}>1 hora</option>
+                <option value={2}>2 horas</option>
+              </select>
+            </div>
           </section>
 
           {/* MOVIMENTO */}
@@ -755,7 +848,7 @@ export function OnboardingForm({
           </section>
 
           {/* INFORMAÇÃO SOBRE PRÓXIMAS CONFIGURAÇÕES */}
-          <section className="rounded-2xl border border-[#E8A33D]/10 bg-[#E8A33D]/[0.03] p-6">
+          {!emConfiguracoes && <section className="rounded-2xl border border-[#E8A33D]/10 bg-[#E8A33D]/[0.03] p-6">
             <h2 className="text-sm font-semibold text-white">
               O que vem a seguir
             </h2>
@@ -767,7 +860,7 @@ export function OnboardingForm({
               as demais regras. Por enquanto, esta página só recolhe e
               guarda a configuração.
             </p>
-          </section>
+          </section>}
 
           {/* ERRO */}
           {(erroLocal || state?.erro) && (
@@ -778,6 +871,12 @@ export function OnboardingForm({
             </div>
           )}
 
+          {state?.sucesso && !erroLocal && (
+            <div className="rounded-xl border border-[#3EC6B9]/20 bg-[#3EC6B9]/[0.06] px-4 py-3">
+              <p className="text-sm text-[#3EC6B9]">Alterações salvas com sucesso.</p>
+            </div>
+          )}
+
           {/* BOTÃO */}
           <div className="flex justify-end border-t border-white/[0.06] pt-6">
             <button
@@ -785,7 +884,11 @@ export function OnboardingForm({
               disabled={pending}
               className="rounded-xl bg-gradient-to-b from-[#E8A33D] to-[#d1902f] px-6 py-3 text-sm font-semibold text-[#1a1206] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {pending ? "A guardar..." : "Guardar configuração"}
+              {pending
+                ? "A guardar..."
+                : emConfiguracoes
+                  ? "Salvar alterações"
+                  : "Guardar configuração"}
             </button>
           </div>
         </form>
@@ -845,6 +948,16 @@ function CampoHorario({
         />
       </div>
     </div>
+  );
+}
+
+export function OnboardingForm(props: DadosPerfilOperacionalProps) {
+  return (
+    <PerfilOperacionalForm
+      {...props}
+      action={salvarConfiguracaoOperacional}
+      contexto="onboarding"
+    />
   );
 }
 

@@ -53,7 +53,7 @@ export async function getRestaurante(restauranteId: string): Promise<Restaurante
   const { data, error } = await supabase
     .from("restaurantes")
     .select(
-      "id, nome, pais, moeda, usa_zonas, plano, max_funcionarios, permite_ia, status_assinatura, trial_ends_at, valor_hora_padrao, frequencia_pagamento_padrao, onboarding_concluido, dias_funcionamento, cobertura_fds_prioritaria, ponto_automatico"
+      "id, nome, pais, moeda, usa_zonas, plano, max_funcionarios, permite_ia, permite_horario_repartido, permite_horas_extras, limite_horas_extras_semanais, status_assinatura, trial_ends_at, valor_hora_padrao, frequencia_pagamento_padrao, onboarding_concluido, dias_funcionamento, cobertura_fds_prioritaria, ponto_automatico"
     )
     .eq("id", restauranteId)
     .single();
@@ -69,6 +69,11 @@ export async function getRestaurante(restauranteId: string): Promise<Restaurante
     plano: data.plano as "trial" | "basico" | "pro",
     maxFuncionarios: data.max_funcionarios as number,
     permiteIA: data.permite_ia as boolean,
+    permiteHorarioRepartido: data.permite_horario_repartido ?? false,
+    permiteHorasExtras: data.permite_horas_extras ?? false,
+    limiteHorasExtrasSemanais: data.permite_horas_extras
+      ? Number(data.limite_horas_extras_semanais)
+      : 0,
     statusAssinatura: data.status_assinatura as "trial" | "active" | "canceled",
     trialEndsAt: data.trial_ends_at as string,
     valorHoraPadrao: Number(data.valor_hora_padrao),

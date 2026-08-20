@@ -20,6 +20,9 @@ export default async function OnboardingPage() {
       cargosExistentes={cargosExistentes}
       horariosExistentes={configuracao.horarios}
       coberturaFdsExistente={configuracao.coberturaFdsPrioritaria}
+      permiteHorarioRepartidoExistente={configuracao.permiteHorarioRepartido}
+      permiteHorasExtrasExistente={configuracao.permiteHorasExtras}
+      limiteHorasExtrasExistente={configuracao.limiteHorasExtrasSemanais}
       movimentosExistentes={configuracao.movimentos}
       necessidadesExistentes={configuracao.necessidades}
     />

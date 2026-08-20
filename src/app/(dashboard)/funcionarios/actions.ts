@@ -125,6 +125,8 @@ export async function salvarFuncionario(
     const ehGerencia = formData.get("ehGerencia") === "on";
     const podeAbertura = formData.get("podeAbertura") === "on";
     const podeFechamento = formData.get("podeFechamento") === "on";
+    const aceitaHorarioRepartido = formData.get("aceitaHorarioRepartido") === "on";
+    const aceitaHorasExtras = formData.get("aceitaHorasExtras") === "on";
 
     // Validações básicas
     if (!nome || !cargo) {
@@ -221,6 +223,8 @@ export async function salvarFuncionario(
       pausa_almoco_minutos: pausaAlmocoMinutos,
       pode_abertura: podeAbertura,
       pode_fechamento: podeFechamento,
+      aceita_horario_repartido: aceitaHorarioRepartido,
+      aceita_horas_extras: aceitaHorasExtras,
       eh_gerencia: ehGerencia,
       tipo_contrato: "full_time" as const,
       modalidade_pagamento: "mes" as const,

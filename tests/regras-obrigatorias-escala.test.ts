@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agruparMinimosPorFuncao,
+  alertaCoberturaImpossivel,
   calcularJornadaOperacional,
   funcionarioAtendeFuncao,
+  horasExtrasParaCoberturaObrigatoria,
   obterFalhasNasExtremidades,
   podeAssumirResponsabilidade,
+  podeRemoverDiaSemDescobrirCobertura,
   pontuarCoberturaDia,
   respeitaDescansoMinimo,
   respeitaMaximoDiasConsecutivos,
 } from "../src/lib/escalas/regras-obrigatorias.ts";
+import { intervaloEmMinutos } from "../src/lib/horas.ts";
 
 test("exige onze horas de descanso entre jornadas", () => {
   const anterior = { inicio: 9 * 60, fim: 17 * 60 };
@@ -58,6 +62,26 @@ test("cobertura abaixo do mínimo prevalece sobre ajustes históricos", () => {
   assert.ok(diaAbaixoDoMinimo > diaCobertoComVantagemHistorica);
 });
 
+test("dia aberto não perde candidato válido por já ter atingido a meta semanal", () => {
+  assert.equal(horasExtrasParaCoberturaObrigatoria(40, 5, 8), 8);
+});
+
+test("folga não vence a cobertura mínima", () => {
+  assert.equal(podeRemoverDiaSemDescobrirCobertura(2, 2), false);
+  assert.equal(podeRemoverDiaSemDescobrirCobertura(3, 2), true);
+});
+
+test("carga semanal esgotada não vence cobertura obrigatória", () => {
+  const horasRestantes = 0;
+  const horasCobertura = horasRestantes || horasExtrasParaCoberturaObrigatoria(40, 5, 10);
+  assert.equal(horasCobertura, 8);
+});
+
+test("caso matematicamente impossível gera alerta explícito", () => {
+  assert.equal(alertaCoberturaImpossivel(0), null);
+  assert.match(alertaCoberturaImpossivel(2) ?? "", /Cobertura impossível: 2 requisito/);
+});
+
 test("ancora responsáveis na abertura e no fechamento real", () => {
   assert.deepEqual(
     calcularJornadaOperacional(9 * 60, 23 * 60, 12 * 60, 8 * 60, "abertura"),
@@ -74,6 +98,21 @@ test("fechamento após meia-noite termina no horário real", () => {
     calcularJornadaOperacional(18 * 60, 25 * 60, 22 * 60, 6 * 60, "fechamento"),
     { inicio: 19 * 60, fim: 25 * 60 }
   );
+});
+
+test("sábado fechando 00:00 continua ancorado no fim real", () => {
+  const sabado = 5;
+  const horario = intervaloEmMinutos("18:00", "00:00");
+  const jornada = calcularJornadaOperacional(
+    horario.inicio,
+    horario.fim,
+    22 * 60,
+    6 * 60,
+    "fechamento"
+  );
+
+  assert.deepEqual(jornada, { inicio: 18 * 60, fim: 24 * 60 });
+  assert.equal(sabado * 24 * 60 + jornada.fim, 6 * 24 * 60);
 });
 
 test("funcionário não apto não cobre fechamento e gera falha", () => {

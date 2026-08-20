@@ -106,6 +106,8 @@ export type Database = {
       }
       funcionarios: {
         Row: {
+          aceita_horas_extras: boolean
+          aceita_horario_repartido: boolean
           ativo: boolean
           carga_horaria_semanal_max: number
           cargo: string
@@ -130,6 +132,8 @@ export type Database = {
           zona_id: string | null
         }
         Insert: {
+          aceita_horas_extras?: boolean
+          aceita_horario_repartido?: boolean
           ativo?: boolean
           carga_horaria_semanal_max?: number
           cargo: string
@@ -154,6 +158,8 @@ export type Database = {
           zona_id?: string | null
         }
         Update: {
+          aceita_horas_extras?: boolean
+          aceita_horario_repartido?: boolean
           ativo?: boolean
           carga_horaria_semanal_max?: number
           cargo?: string
@@ -459,6 +465,9 @@ export type Database = {
           onboarding_concluido: boolean
           pais: string
           permite_ia: boolean
+          permite_horario_repartido: boolean
+          permite_horas_extras: boolean
+          limite_horas_extras_semanais: number
           plano: string
           ponto_automatico: boolean
           status_assinatura: string
@@ -480,6 +489,9 @@ export type Database = {
           onboarding_concluido?: boolean
           pais: string
           permite_ia?: boolean
+          permite_horario_repartido?: boolean
+          permite_horas_extras?: boolean
+          limite_horas_extras_semanais?: number
           plano?: string
           ponto_automatico?: boolean
           status_assinatura?: string
@@ -501,6 +513,9 @@ export type Database = {
           onboarding_concluido?: boolean
           pais?: string
           permite_ia?: boolean
+          permite_horario_repartido?: boolean
+          permite_horas_extras?: boolean
+          limite_horas_extras_semanais?: number
           plano?: string
           ponto_automatico?: boolean
           status_assinatura?: string

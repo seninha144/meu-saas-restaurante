@@ -120,6 +120,30 @@ export function pontuarCoberturaDia(
   return -(trabalhadores / Math.max(ideal, minimo, 1)) * 100;
 }
 
+export function podeRemoverDiaSemDescobrirCobertura(
+  trabalhadoresPlanejados: number,
+  minimoOperacional: number
+): boolean {
+  return trabalhadoresPlanejados - 1 >= minimoOperacional;
+}
+
+export function horasExtrasParaCoberturaObrigatoria(
+  cargaHorariaSemanal: number,
+  diasTrabalhoAlvo: number,
+  horasMaximasNoDia: number
+): number {
+  if (cargaHorariaSemanal <= 0 || horasMaximasNoDia <= 0) return 0;
+
+  const jornadaBase = cargaHorariaSemanal / Math.max(1, diasTrabalhoAlvo);
+  return Math.min(jornadaBase, horasMaximasNoDia);
+}
+
+export function alertaCoberturaImpossivel(vagasSemCandidato: number): string | null {
+  if (vagasSemCandidato <= 0) return null;
+
+  return `Cobertura impossível: ${vagasSemCandidato} requisito(s) mínimo(s) de abertura, fechamento, período ou função ficaram sem funcionário elegível dentro da disponibilidade, descanso e limite semanal automático.`;
+}
+
 export function normalizarFuncao(funcao: string): string {
   return funcao.trim().toLocaleLowerCase("pt-PT");
 }

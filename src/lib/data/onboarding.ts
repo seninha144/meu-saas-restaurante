@@ -11,6 +11,9 @@ import { NIVEIS_MOVIMENTO, PERIODOS_OPERACIONAIS } from "@/types/dominio";
 export interface ConfiguracaoOnboarding {
   horarios: HorarioFuncionamento[];
   coberturaFdsPrioritaria: boolean;
+  permiteHorarioRepartido: boolean;
+  permiteHorasExtras: boolean;
+  limiteHorasExtrasSemanais: number;
   movimentos: MovimentoOperacional[];
   necessidades: NecessidadeEquipe[];
 }
@@ -48,7 +51,7 @@ export async function getConfiguracaoOnboarding(
   ] = await Promise.all([
     supabase
       .from("restaurantes")
-      .select("cobertura_fds_prioritaria")
+      .select("cobertura_fds_prioritaria, permite_horario_repartido, permite_horas_extras, limite_horas_extras_semanais")
       .eq("id", restauranteId)
       .single(),
     supabase
@@ -119,6 +122,12 @@ export async function getConfiguracaoOnboarding(
     horarios,
     coberturaFdsPrioritaria:
       restauranteRaw?.cobertura_fds_prioritaria ?? true,
+    permiteHorarioRepartido:
+      restauranteRaw?.permite_horario_repartido ?? false,
+    permiteHorasExtras: restauranteRaw?.permite_horas_extras ?? false,
+    limiteHorasExtrasSemanais: restauranteRaw?.permite_horas_extras
+      ? Number(restauranteRaw.limite_horas_extras_semanais)
+      : 0,
     movimentos,
     necessidades,
   };

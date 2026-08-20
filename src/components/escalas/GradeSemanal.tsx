@@ -59,6 +59,7 @@ interface GradeSemanalProps {
   onEditarFuncionario: (
     funcionario: Funcionario
   ) => void;
+  offsetAtual: number;
 }
 
 function resumoJornada(
@@ -227,6 +228,7 @@ export function GradeSemanal({
   onAbrirNovoFuncionario,
   onAbrirGestaoZonas,
   onEditarFuncionario,
+  offsetAtual,
 }: GradeSemanalProps) {
   const [
     zonaFiltro,
@@ -277,6 +279,10 @@ export function GradeSemanal({
     mostrarConfirmacaoSemanaSeguinte,
     setMostrarConfirmacaoSemanaSeguinte,
   ] = useState(false);
+  const [confirmacaoSemanaEmAndamento, setConfirmacaoSemanaEmAndamento] = useState<{
+    diaAtualNome?: string;
+  } | null>(null);
+  const [geracaoTardia, setGeracaoTardia] = useState(false);
 
   const [
     mostrarMenuAcoes,
@@ -343,7 +349,7 @@ export function GradeSemanal({
     if (
       possuiTurnos &&
       !window.confirm(
-        "Esta ação vai substituir todos os turnos desta semana pela nova geração automática. Deseja continuar?"
+        "Esta ação vai substituir os turnos futuros abrangidos pela nova geração automática. Deseja continuar?"
       )
     ) {
       return;
@@ -368,6 +374,10 @@ export function GradeSemanal({
 
         return;
       }
+      if (resultado.confirmarSemanaEmAndamento) {
+        setConfirmacaoSemanaEmAndamento({ diaAtualNome: resultado.diaAtualNome });
+        return;
+      }
 
       if (resultado.erro) {
         setResultadoGeracao(
@@ -387,9 +397,10 @@ export function GradeSemanal({
           `${resultado.vagasSemCandidato} vaga(s) em aberto, mas nenhum funcionário elegível — verifique zona, disponibilidade, carga horária e folgas.`
         );
       } else {
+        setGeracaoTardia(resultado.semanaEmAndamento ?? false);
         const resumoMeta =
           resultado.funcionariosComMetaIncompleta
-            ? `${resultado.funcionariosComMetaIncompleta} colaborador(es) ainda com ${resultado.horasNaoAlocadas}h não alocadas.`
+            ? `${resultado.funcionariosComMetaIncompleta} colaborador(es) ainda com ${resultado.horasNaoAlocadas}h não alocadas${resultado.semanaEmAndamento ? " porque a semana já está em andamento" : ""}.`
             : "Metas semanais concluídas.";
 
         setResultadoGeracao(
@@ -397,6 +408,26 @@ export function GradeSemanal({
         );
       }
 
+      router.refresh();
+    });
+  }
+
+  function gerarApenasDiasRestantes() {
+    setConfirmacaoSemanaEmAndamento(null);
+    setResultadoGeracao(null);
+    startGerando(async () => {
+      const resultado = await gerarEscalaAutomatica(
+        escalaId, modoAltaDemanda, possuiTurnos, false, true
+      );
+      if (resultado.erro) {
+        setResultadoGeracao(resultado.erro);
+        return;
+      }
+      setGeracaoTardia(true);
+      const incompleta = resultado.funcionariosComMetaIncompleta
+        ? `${resultado.horasNaoAlocadas}h não alocadas — semana em andamento.`
+        : "Metas semanais concluídas.";
+      setResultadoGeracao(`${resultado.turnosGerados ?? 0} turno(s) gerado(s). ${incompleta}`);
       router.refresh();
     });
   }
@@ -413,6 +444,7 @@ export function GradeSemanal({
     setMostrarConfirmacaoSemanaSeguinte(
       false
     );
+    setConfirmacaoSemanaEmAndamento(null);
 
     setResultadoGeracao(null);
 
@@ -1104,9 +1136,30 @@ export function GradeSemanal({
       </div>
 
       {resultadoGeracao && (
-        <p className="mt-2 text-xs text-white/40">
+        <p className={`mt-2 text-xs ${geracaoTardia ? "text-[#F2C94C]/70" : "text-white/40"}`}>
           {resultadoGeracao}
         </p>
+      )}
+
+      {confirmacaoSemanaEmAndamento && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="semana-em-andamento-titulo">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#151515] p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F2C94C]/10 text-[#F2C94C]"><AlertCircle className="h-5 w-5" /></div>
+              <div>
+                <h2 id="semana-em-andamento-titulo" className="text-base font-semibold text-white">Esta semana já está em andamento</h2>
+                <p className="mt-2 text-sm leading-6 text-white/60">
+                  Hoje é {confirmacaoSemanaEmAndamento.diaAtualNome ?? "um dia desta semana"}. O sistema preservará o passado, reorganizará apenas os dias restantes e não concentrará as horas não trabalhadas. Recomendamos gerar a próxima semana.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setConfirmacaoSemanaEmAndamento(null)} disabled={gerando} className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/70">Cancelar</button>
+              <button type="button" onClick={irParaSemanaSeguinte} disabled={gerando} className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80">Ir para próxima semana</button>
+              <button type="button" onClick={gerarApenasDiasRestantes} disabled={gerando} className="rounded-xl bg-gradient-to-b from-[#E8A33D] to-[#d1902f] px-4 py-2 text-sm font-semibold text-[#1a1206]">Gerar apenas dias restantes</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* =====================================================
@@ -1652,6 +1705,8 @@ export function GradeSemanal({
                           const sobrecarregado =
                             f.horasSemana >
                             f.cargaHorariaSemanalMax;
+                          const cargaTardia = offsetAtual === 0 && geracaoTardia &&
+                            f.horasSemana < f.cargaHorariaSemanalMax;
 
                           return (
                             <div
@@ -1680,6 +1735,8 @@ export function GradeSemanal({
                                   className={`mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
                                     sobrecarregado
                                       ? "bg-[#E5484D]/15 text-[#E5484D]"
+                                      : cargaTardia
+                                        ? "bg-[#F2C94C]/10 text-[#F2C94C]/80"
                                       : "bg-white/[0.06] text-white/50"
                                   }`}
                                 >
@@ -1692,6 +1749,11 @@ export function GradeSemanal({
                                   }
                                   h
                                 </span>
+                                {cargaTardia && (
+                                  <span className="text-[10px] text-[#F2C94C]/60">
+                                    {Math.round((f.cargaHorariaSemanalMax - f.horasSemana) * 100) / 100}h não alocadas — semana em andamento
+                                  </span>
+                                )}
                               </button>
 
                               {dias.map(

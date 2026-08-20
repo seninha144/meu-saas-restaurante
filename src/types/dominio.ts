@@ -21,6 +21,9 @@ export interface Restaurante {
   plano: Plano;
   maxFuncionarios: number;
   permiteIA: boolean;
+  permiteHorarioRepartido: boolean;
+  permiteHorasExtras: boolean;
+  limiteHorasExtrasSemanais: number;
   statusAssinatura: StatusAssinatura;
   trialEndsAt: string;
   valorHoraPadrao: number;
@@ -173,6 +176,8 @@ export interface Funcionario {
   pausaAlmocoMinutos: number;
   podeAbertura: boolean;
   podeFechamento: boolean;
+  aceitaHorarioRepartido: boolean;
+  aceitaHorasExtras: boolean;
   ehGerencia: boolean;
 }
 

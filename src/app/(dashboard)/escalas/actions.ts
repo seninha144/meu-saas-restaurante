@@ -11,8 +11,10 @@ import {
 import {
   agruparMinimosPorFuncao,
   calcularJornadaOperacional,
+  alertaCoberturaImpossivel,
   funcionarioAtendeFuncao,
   normalizarFuncao,
+  podeRemoverDiaSemDescobrirCobertura,
   podeAssumirResponsabilidade,
   pontuarCoberturaDia,
   respeitaDescansoMinimo,
@@ -21,6 +23,10 @@ import {
   type ResponsabilidadeOperacional,
 } from "@/lib/escalas/regras-obrigatorias";
 import {
+  cabeNoLimiteAutomatico,
+  limiteAutomaticoFuncionario,
+} from "@/lib/escalas/limite-carga-semanal";
+import {
   agregarHistoricoTurnos,
   calcularReferenciasJustica,
   desempateSemanal,
@@ -28,9 +34,21 @@ import {
   pontuarJusticaHistorica,
   type TurnoHistorico,
 } from "@/lib/escalas/historico";
-import { getInicioSemana, toISODate } from "@/lib/dates";
+import { toISODate } from "@/lib/dates";
+import { criarSnapshotSemanal } from "@/lib/data/snapshot-semanal";
+import {
+  executarModoSombra,
+  logarResumoModoSombra,
+  modoSombraHabilitado,
+} from "@/lib/escalas/modo-sombra";
+import { adaptarSnapshotParaGeradorAtual } from "@/lib/escalas/snapshot-semanal";
 import { createClient } from "@/lib/supabase/server";
 import { PERIODOS, type Periodo } from "@/types/dominio";
+import {
+  inicioAutomaticoPermitido,
+  cabeNoLimiteDiarioAutomatico,
+  MAX_HORAS_DIARIAS_AUTOMATICAS,
+} from "@/lib/escalas/contexto-temporal";
 
 const SEXTA = 4;
 const SABADO = 5;
@@ -46,6 +64,9 @@ export interface GerarEscalaState {
   horasNaoAlocadas?: number;
   funcionariosComMetaIncompleta?: number;
   confirmarSemanaSeguinte?: boolean;
+  confirmarSemanaEmAndamento?: boolean;
+  diaAtualNome?: string;
+  semanaEmAndamento?: boolean;
   semanaInicioGerada?: string;
 }
 
@@ -58,6 +79,7 @@ interface PerfilFuncionario {
   diasTrabalhoAlvo: number;
   podeAbertura: boolean;
   podeFechamento: boolean;
+  aceitaHorasExtras: boolean;
 }
 
 type PeriodoOperacional =
@@ -99,15 +121,6 @@ interface TurnoNovo {
   status: "agendado";
 }
 
-function paraISODateUTC(data: Date): string {
-  return `${data.getUTCFullYear()}-${String(
-    data.getUTCMonth() + 1
-  ).padStart(2, "0")}-${String(data.getUTCDate()).padStart(
-    2,
-    "0"
-  )}`;
-}
-
 function inicioDosPeriodos(
   abertura: string,
   fechamento: string
@@ -132,19 +145,20 @@ export async function gerarEscalaAutomatica(
   escalaId: string,
   modoAltaDemanda = false,
   substituirTurnosExistentes = false,
-  forcarSemanaSeguinte = false
+  forcarSemanaSeguinte = false,
+  forcarDiasRestantes = false
 ): Promise<GerarEscalaState> {
   const gerente = await requireGerente();
   const supabase = await createClient();
 
   const [
-    { data: restaurante },
+    { data: restauranteInicial },
     { data: escalaInicial },
   ] = await Promise.all([
     supabase
       .from("restaurantes")
       .select(
-        "usa_zonas, permite_ia, dias_funcionamento, cobertura_fds_prioritaria"
+        "id, usa_zonas, permite_ia, permite_horario_repartido, permite_horas_extras, limite_horas_extras_semanais, dias_funcionamento, cobertura_fds_prioritaria, fuso_horario"
       )
       .eq("id", gerente.restauranteId)
       .single(),
@@ -170,45 +184,12 @@ export async function gerarEscalaAutomatica(
   }
 
   if (
-    restaurante &&
-    !restaurante.permite_ia
+    restauranteInicial &&
+    !restauranteInicial.permite_ia
   ) {
     return {
       erro:
         "Seu plano atual não inclui a geração automática de escala. Faça upgrade pra liberar.",
-    };
-  }
-
-  /*
-   * ==========================================================
-   * PROTEÇÃO DE FIM DE SEMANA
-   * ==========================================================
-   */
-
-  const semanaAtualInicio = toISODate(
-    getInicioSemana(new Date())
-  );
-
-  const hojeDiaSemana =
-    new Date().getUTCDay();
-
-  const eFimDeSemana =
-    hojeDiaSemana === 0 ||
-    hojeDiaSemana === 6;
-
-  const eSemanaAtual =
-    escalaInicial.semana_inicio ===
-    semanaAtualInicio;
-
-  if (
-    eSemanaAtual &&
-    eFimDeSemana &&
-    !forcarSemanaSeguinte
-  ) {
-    return {
-      erro:
-        "Não é possível gerar a escala pois está em cima da hora, gostaria de gerar a escala da semana seguinte?",
-      confirmarSemanaSeguinte: true,
     };
   }
 
@@ -309,104 +290,71 @@ export async function gerarEscalaAutomatica(
    * ==========================================================
    */
 
-  const {
-    data: turnosExistentes,
-    error: erroTurnosExistentes,
-  } = await supabase
-    .from("turnos")
-    .select(
-      "id, funcionario_id, zona_id, dia_semana, periodo, hora_inicio, hora_fim"
-    )
-    .eq("escala_id", escala.id)
-    .eq(
-      "restaurante_id",
-      gerente.restauranteId
+  let snapshot;
+  try {
+    snapshot = await criarSnapshotSemanal(
+      supabase,
+      gerente.restauranteId,
+      escala,
+      restauranteInicial
     );
-
-  if (erroTurnosExistentes) {
+  } catch (error) {
     return {
-      erro: `Falha ao consultar a escala: ${erroTurnosExistentes.message}`,
+      erro: error instanceof Error ? error.message : "Falha ao carregar os dados da semana.",
     };
   }
 
-  const inicioHistorico = new Date(`${escala.semana_inicio}T00:00:00Z`);
-  inicioHistorico.setUTCDate(inicioHistorico.getUTCDate() - 28);
+  const inicioGeradorLegado = performance.now();
 
-  const { data: escalasHistoricas, error: erroEscalasHistoricas } = await supabase
-    .from("escalas")
-    .select("id, semana_inicio")
-    .eq("restaurante_id", gerente.restauranteId)
-    .gte("semana_inicio", toISODate(inicioHistorico))
-    .lt("semana_inicio", escala.semana_inicio);
+  const dadosAtuais = adaptarSnapshotParaGeradorAtual(snapshot);
+  const restaurante = dadosAtuais.restaurante;
+  let turnosExistentes = dadosAtuais.turnosExistentes;
+  const turnosHistoricos: TurnoHistorico[] = snapshot.historicoQuatroSemanas;
+  const turnosSemanaAnterior = snapshot.turnosSemanaAnterior;
+  const contextoTemporal = snapshot.temporal!;
 
-  if (erroEscalasHistoricas) {
-    return { erro: `Falha ao consultar o histórico de escalas: ${erroEscalasHistoricas.message}` };
+  if (contextoTemporal.classificacao === "passada") {
+    return { erro: "Esta semana já terminou e não pode ser regenerada automaticamente." };
+  }
+  if (contextoTemporal.semanaEmAndamento && !forcarDiasRestantes && !forcarSemanaSeguinte) {
+    const nomes = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"];
+    return {
+      confirmarSemanaEmAndamento: true,
+      diaAtualNome: contextoTemporal.diaAtual === null ? undefined : nomes[contextoTemporal.diaAtual],
+      semanaEmAndamento: true,
+    };
   }
 
-  const idsEscalasHistoricas = (escalasHistoricas ?? []).map((item) => item.id);
-  const { data: turnosHistoricosRaw, error: erroTurnosHistoricos } = idsEscalasHistoricas.length
-    ? await supabase
-        .from("turnos")
-        .select("escala_id, funcionario_id, dia_semana, periodo, hora_inicio, hora_fim")
-        .in("escala_id", idsEscalasHistoricas)
-        .eq("restaurante_id", gerente.restauranteId)
-    : { data: [], error: null };
-
-  if (erroTurnosHistoricos) {
-    return { erro: `Falha ao consultar turnos históricos: ${erroTurnosHistoricos.message}` };
-  }
-
-  const semanasPorEscala = new Map(
-    (escalasHistoricas ?? []).map((item) => [item.id, item.semana_inicio])
-  );
-  const turnosHistoricos: TurnoHistorico[] = (turnosHistoricosRaw ?? []).flatMap(
-    (turno) => {
-      const semanaInicio = semanasPorEscala.get(turno.escala_id);
-      if (!semanaInicio) return [];
-      return [{
-        funcionarioId: turno.funcionario_id,
-        semanaInicio,
-        diaSemana: turno.dia_semana,
-        periodo: turno.periodo as Periodo,
-        horaInicio: turno.hora_inicio,
-        horaFim: turno.hora_fim,
-      }];
-    }
-  );
-  const inicioSemanaAnterior = new Date(`${escala.semana_inicio}T00:00:00Z`);
-  inicioSemanaAnterior.setUTCDate(inicioSemanaAnterior.getUTCDate() - 7);
-  const semanaAnteriorISO = toISODate(inicioSemanaAnterior);
-  const turnosSemanaAnterior = turnosHistoricos.filter(
-    (turno) => turno.semanaInicio === semanaAnteriorISO
-  );
-
-  const turnosSubstituidos =
-    substituirTurnosExistentes
-      ? turnosExistentes?.length ?? 0
-      : 0;
+  const diasSubstituiveis = Array.from({ length: 7 }, (_, dia) => dia)
+    .filter((dia) => !contextoTemporal.diasPassados.includes(dia) && dia !== contextoTemporal.diaAtual);
+  const turnosSubstituidos = substituirTurnosExistentes
+    ? turnosExistentes.filter((turno) => diasSubstituiveis.includes(turno.dia_semana)).length
+    : 0;
 
   if (
     substituirTurnosExistentes &&
     turnosSubstituidos > 0
   ) {
-    const { error } =
-      await supabase
+    const consulta = supabase
         .from("turnos")
         .delete()
         .eq(
           "escala_id",
           escala.id
         )
-        .eq(
-          "restaurante_id",
-          gerente.restauranteId
-        );
+        .eq("restaurante_id", gerente.restauranteId);
+    const { error } = diasSubstituiveis.length > 0
+      ? await consulta.in("dia_semana", diasSubstituiveis)
+      : { error: null };
 
     if (error) {
       return {
         erro: `Falha ao limpar os turnos existentes: ${error.message}`,
       };
     }
+    turnosExistentes = turnosExistentes.filter(
+      (turno) => !diasSubstituiveis.includes(turno.dia_semana)
+    );
   }
 
   /*
@@ -415,77 +363,6 @@ export async function gerarEscalaAutomatica(
    * ==========================================================
    */
 
-  const [
-    { data: zonasRaw },
-    { data: funcionariosRaw },
-    { data: disponibilidadesRaw },
-    { data: horariosRaw },
-    { data: movimentosRaw },
-    { data: necessidadesRaw },
-  ] = await Promise.all([
-    supabase
-      .from("zonas")
-      .select(
-        "id, capacidade_minima"
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      )
-      .eq("ativo", true),
-
-    supabase
-      .from("funcionarios")
-      .select(
-        "id, cargo, zona_id, carga_horaria_semanal_max, folgas_obrigatorias_semana, pausa_almoco_minutos, pode_abertura, pode_fechamento"
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      )
-      .eq("ativo", true),
-
-    supabase
-      .from("disponibilidades")
-      .select(
-        "funcionario_id, dia_semana, disponivel, periodo"
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      ),
-
-    supabase
-      .from("horarios_funcionamento")
-      .select(
-        "dia_semana, fechado, hora_abertura, hora_fechamento"
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      ),
-
-    supabase
-      .from("movimento_operacional")
-      .select(
-        "dia_semana, periodo, nivel"
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      ),
-
-    supabase
-      .from("necessidades_equipe")
-      .select(
-        "dia_semana, periodo, zona_id, funcao, minimo, ideal, maximo"
-      )
-      .eq(
-        "restaurante_id",
-        gerente.restauranteId
-      ),
-  ]);
-
   const usaZonas =
     restaurante?.usa_zonas ?? true;
 
@@ -493,76 +370,12 @@ export async function gerarEscalaAutomatica(
     restaurante?.dias_funcionamento ??
     [0, 1, 2, 3, 4, 5, 6];
 
-  const zonas = zonasRaw ?? [];
-  const disponibilidades =
-    disponibilidadesRaw ?? [];
-  const movimentos =
-    movimentosRaw ?? [];
-  const necessidades =
-    necessidadesRaw ?? [];
-
-  const horariosPorDia =
-    new Map<number, HorarioDia>();
-
-  for (
-    const horario of
-      horariosRaw ?? []
-  ) {
-    horariosPorDia.set(
-      horario.dia_semana,
-      {
-        fechado:
-          horario.fechado,
-        abertura:
-          horario.hora_abertura?.slice(
-            0,
-            5
-          ) ?? "09:00",
-        fechamento:
-          horario.hora_fechamento?.slice(
-            0,
-            5
-          ) ?? "23:00",
-      }
-    );
-  }
-
-  const funcionarios: PerfilFuncionario[] =
-    (funcionariosRaw ?? []).map(
-      (funcionario) => ({
-        id: funcionario.id,
-        cargo: funcionario.cargo ?? "",
-        zonaId:
-          funcionario.zona_id,
-
-        cargaHorariaSemanalMax:
-          Number(
-            funcionario.carga_horaria_semanal_max
-          ),
-
-        pausaAlmocoMinutos:
-          funcionario.pausa_almoco_minutos ??
-          30,
-
-        podeAbertura:
-          funcionario.pode_abertura ?? true,
-
-        podeFechamento:
-          funcionario.pode_fechamento ?? true,
-
-        diasTrabalhoAlvo:
-          Math.max(
-            0,
-            Math.min(
-              7 -
-                Number(
-                  funcionario.folgas_obrigatorias_semana
-                ),
-              diasFuncionamento.length
-            )
-          ),
-      })
-    );
+  const zonas = dadosAtuais.zonas;
+  const disponibilidades = dadosAtuais.disponibilidades;
+  const movimentos = dadosAtuais.movimentos;
+  const necessidades = dadosAtuais.necessidades;
+  const horariosPorDia: Map<number, HorarioDia> = dadosAtuais.horariosPorDia;
+  const funcionarios: PerfilFuncionario[] = dadosAtuais.funcionarios;
 
   const metricasHistoricas = agregarHistoricoTurnos(
     turnosHistoricos,
@@ -585,40 +398,7 @@ export async function gerarEscalaAutomatica(
    * ==========================================================
    */
 
-  const semanaInicio =
-    new Date(
-      `${escala.semana_inicio}T00:00:00Z`
-    );
-
-  const hojeISO =
-    paraISODateUTC(new Date());
-
-  const dataDoDia = (
-    dia: number
-  ) => {
-    const data =
-      new Date(semanaInicio);
-
-    data.setUTCDate(
-      data.getUTCDate() + dia
-    );
-
-    return paraISODateUTC(
-      data
-    );
-  };
-
-  const diasPassados =
-    new Set(
-      Array.from(
-        { length: 7 },
-        (_, dia) => dia
-      ).filter(
-        (dia) =>
-          dataDoDia(dia) <
-          hojeISO
-      )
-    );
+  const diasPassados = new Set(contextoTemporal.diasPassados);
 
   /*
    * IMPORTANTE:
@@ -698,6 +478,12 @@ export async function gerarEscalaAutomatica(
         ]
       )
     );
+
+  const horasAlocadas = new Map<string, number>(
+    funcionarios.map((funcionario) => [funcionario.id, 0])
+  );
+  const horasAlocadasPorDia = new Map<string, number>();
+  const chaveHorasDia = (funcionarioId: string, dia: number) => `${funcionarioId}:${dia}`;
 
   const coberturaExistente =
     new Map<
@@ -801,6 +587,12 @@ export async function gerarEscalaAutomatica(
             horas
         )
       );
+      horasAlocadas.set(
+        funcionario.id,
+        (horasAlocadas.get(funcionario.id) ?? 0) + horas
+      );
+      const chaveDia = chaveHorasDia(funcionario.id, turno.dia_semana);
+      horasAlocadasPorDia.set(chaveDia, (horasAlocadasPorDia.get(chaveDia) ?? 0) + horas);
 
       const horarioDia = horariosPorDia.get(turno.dia_semana);
       const inicioTurno = turno.hora_inicio?.slice(0, 5);
@@ -1548,7 +1340,8 @@ export async function gerarEscalaAutomatica(
   const horasPlanejadas = (
     funcionario: PerfilFuncionario,
     dia: number,
-    periodo: Periodo
+    periodo: Periodo,
+    coberturaObrigatoria = false
   ) => {
     const horario =
       horarioDoTurno(
@@ -1583,16 +1376,44 @@ export async function gerarEscalaAutomatica(
           ocupados
       );
 
-    if (
-      restantes <= 0
-    ) {
-      return 0;
+    const horasPorDia = restantes / diasRestantes;
+    const limiteAutomatico = limiteAutomaticoFuncionario(
+      {
+        permiteHorasExtras: restaurante?.permite_horas_extras ?? false,
+        limiteHorasExtrasSemanais: restaurante?.limite_horas_extras_semanais ?? 0,
+      },
+      funcionario
+    );
+    const horasDisponiveisNoLimite = Math.max(
+      0,
+      limiteAutomatico - (horasAlocadas.get(funcionario.id) ?? 0)
+    );
+    const horasDisponiveisNoDia = Math.max(
+      0,
+      MAX_HORAS_DIARIAS_AUTOMATICAS -
+        (horasAlocadasPorDia.get(chaveHorasDia(funcionario.id, dia)) ?? 0)
+    );
+
+    if (coberturaObrigatoria) {
+      return Math.min(
+        Math.max(
+          horasPorDia,
+          funcionario.cargaHorariaSemanalMax /
+            Math.max(1, funcionario.diasTrabalhoAlvo)
+        ),
+        horario.horasMaximas,
+        horasDisponiveisNoLimite,
+        horasDisponiveisNoDia
+      );
     }
 
+    if (restantes <= 0) return 0;
+
     return Math.min(
-      restantes /
-        diasRestantes,
-      horario.horasMaximas
+      horasPorDia,
+      horario.horasMaximas,
+      horasDisponiveisNoLimite,
+      horasDisponiveisNoDia
     );
   };
 
@@ -1603,7 +1424,8 @@ export async function gerarEscalaAutomatica(
     periodo: Periodo,
     foraPreferencia: boolean,
     funcaoObrigatoria?: string,
-    responsabilidade?: ResponsabilidadeOperacional
+    responsabilidade?: ResponsabilidadeOperacional,
+    coberturaObrigatoria = false
   ) => {
     const horario =
       horarioDoTurno(
@@ -1637,8 +1459,8 @@ export async function gerarEscalaAutomatica(
       diaFoiAdicionadoAoPlanejamento
     ) {
       if (
-        planejados.size >=
-        funcionario.diasTrabalhoAlvo
+        planejados.size >= funcionario.diasTrabalhoAlvo &&
+        !coberturaObrigatoria
       ) {
         diaAntigoTrocado =
           tentarTrocarDiaPlanejado(
@@ -1671,9 +1493,10 @@ export async function gerarEscalaAutomatica(
 
     const horas =
       horasPlanejadas(
-        funcionario,
-        dia,
-        periodo
+      funcionario,
+      dia,
+      periodo,
+      coberturaObrigatoria
       );
 
     const jornadaRelativa = calcularJornadaOperacional(
@@ -1695,7 +1518,23 @@ export async function gerarEscalaAutomatica(
       respeitaDescansoMinimo(
         jornadasPorFuncionario.get(funcionario.id) ?? [],
         novaJornada
-      );
+      ) &&
+      cabeNoLimiteAutomatico(
+        horasAlocadas.get(funcionario.id) ?? 0,
+        horas,
+        limiteAutomaticoFuncionario(
+          {
+            permiteHorasExtras: restaurante?.permite_horas_extras ?? false,
+            limiteHorasExtrasSemanais: restaurante?.limite_horas_extras_semanais ?? 0,
+          },
+          funcionario
+        )
+      ) &&
+      cabeNoLimiteDiarioAutomatico(
+        horasAlocadasPorDia.get(chaveHorasDia(funcionario.id, dia)) ?? 0,
+        horas
+      ) &&
+      inicioAutomaticoPermitido(contextoTemporal, dia, jornadaRelativa.inicio);
 
     if (
       horas <= 0 ||
@@ -1895,6 +1734,12 @@ export async function gerarEscalaAutomatica(
         ) - horas
       )
     );
+    horasAlocadas.set(
+      funcionario.id,
+      (horasAlocadas.get(funcionario.id) ?? 0) + horas
+    );
+    const chaveDia = chaveHorasDia(funcionario.id, dia);
+    horasAlocadasPorDia.set(chaveDia, (horasAlocadasPorDia.get(chaveDia) ?? 0) + horas);
 
     coberturaNova.set(
       chaveCobertura,
@@ -1995,8 +1840,8 @@ export async function gerarEscalaAutomatica(
                 diaAntigo
               );
 
-            return (
-              trabalhadoresAntigos >
+            return podeRemoverDiaSemDescobrirCobertura(
+              trabalhadoresAntigos,
               minimoAntigo
             );
           }
@@ -2178,20 +2023,6 @@ export async function gerarEscalaAutomatica(
               return false;
             }
 
-            if (
-              planejados &&
-              planejados.size >=
-                funcionario.diasTrabalhoAlvo
-            ) {
-              if (
-                !encontrarDiaPlanejadoParaTroca(
-                  funcionario,
-                  dia
-                )
-              ) {
-                return false;
-              }
-            }
           }
 
           if (
@@ -2214,11 +2045,8 @@ export async function gerarEscalaAutomatica(
           }
 
           if (
-            (
-              horasRestantes.get(
-                funcionario.id
-              ) ?? 0
-            ) <= 0
+            (horasRestantes.get(funcionario.id) ?? 0) <= 0 &&
+            !permitirDiaNaoPlanejado
           ) {
             return false;
           }
@@ -2264,7 +2092,12 @@ export async function gerarEscalaAutomatica(
           }
 
           const horario = horarioDoTurno(funcionario, dia, periodo);
-          const horas = horasPlanejadas(funcionario, dia, periodo);
+          const horas = horasPlanejadas(
+            funcionario,
+            dia,
+            periodo,
+            permitirDiaNaoPlanejado
+          );
 
           if (!horario || horas <= 0) return false;
 
@@ -2488,7 +2321,8 @@ export async function gerarEscalaAutomatica(
               periodo,
               !periodosPreferidos(candidato.id, dia).includes(periodo),
               funcaoObrigatoria,
-              responsabilidade
+              responsabilidade,
+              true
             );
 
             if (coberta) break;
@@ -2585,7 +2419,9 @@ export async function gerarEscalaAutomatica(
                 dia,
                 periodo,
                 !periodosPreferidos(candidato.id, dia).includes(periodo),
-                funcao
+                funcao,
+                undefined,
+                true
               );
 
               if (!alocado) break;
@@ -2645,7 +2481,10 @@ export async function gerarEscalaAutomatica(
                 !periodosPreferidos(
                   candidato.id,
                   dia
-                ).includes(periodo)
+                ).includes(periodo),
+                undefined,
+                undefined,
+                true
               );
 
             if (!alocado) {
@@ -2938,6 +2777,24 @@ export async function gerarEscalaAutomatica(
    * ==========================================================
    */
 
+  if (modoSombraHabilitado()) {
+    try {
+      const turnosFinaisLegado = substituirTurnosExistentes
+        ? novosTurnos
+        : [...turnosExistentes, ...novosTurnos];
+      const comparacao = await executarModoSombra({
+        snapshot,
+        turnosLegado: turnosFinaisLegado,
+        tempoLegadoMs: Math.round((performance.now() - inicioGeradorLegado) * 100) / 100,
+      });
+      logarResumoModoSombra(comparacao);
+    } catch (error) {
+      console.warn(
+        `[Shadow Optimizer] Falha isolada: ${error instanceof Error ? error.message : "erro desconhecido"}`
+      );
+    }
+  }
+
   if (
     novosTurnos.length >
     0
@@ -2978,11 +2835,17 @@ export async function gerarEscalaAutomatica(
         horas > 0.01
     ).length;
 
+  const alertaBase = alertaCoberturaImpossivel(vagasSemCandidato);
+  const alertaCobertura = alertaBase && contextoTemporal.semanaEmAndamento
+    ? `${alertaBase} A semana já está em andamento e a carga não será redistribuída acima dos limites para compensar dias passados.`
+    : alertaBase;
+
   revalidatePath(
     "/escalas"
   );
 
   return {
+    ...(alertaCobertura ? { erro: alertaCobertura } : {}),
     turnosGerados:
       novosTurnos.length,
 
@@ -2999,6 +2862,7 @@ export async function gerarEscalaAutomatica(
 
     semanaInicioGerada:
       escala.semana_inicio,
+    semanaEmAndamento: contextoTemporal.semanaEmAndamento,
   };
 }
 
